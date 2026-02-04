@@ -70,6 +70,15 @@ pub const MetalView = struct {
         const set_layer_msg: SetLayerFn = @ptrCast(&objc.objc_msgSend);
         set_layer_msg(view, setLayer_sel, layer);
 
+        // --- CRITICAL FIX: setFrame ---
+        // Force the layer to be the same size as the view.
+        // Without this, the layer defaults to 0x0 pixels (invisible).
+        const setFrame_sel = objc.getSelector("setFrame:");
+        const SetFrameFn = *const fn (?objc.Object, ?objc.Selector, Rect) callconv(.c) void;
+        const set_frame_msg: SetFrameFn = @ptrCast(&objc.objc_msgSend);
+        set_frame_msg(layer, setFrame_sel, rect);
+        // ------------------------------
+
         // setWantsLayer: YES
         const setWants_sel = objc.getSelector("setWantsLayer:");
         const SetWantsFn = *const fn (?objc.Object, ?objc.Selector, bool) callconv(.c) void;
@@ -77,6 +86,13 @@ pub const MetalView = struct {
         set_wants_msg(view, setWants_sel, true);
 
         return MetalView{ .handle = view.?, .layer = layer.? };
+    }
+
+    pub fn nextDrawable(self: MetalView) ?objc.Object {
+        const sel = objc.getSelector("nextDrawable");
+        const NextFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
+        const next_msg: NextFn = @ptrCast(&objc.objc_msgSend);
+        return next_msg(self.layer, sel);
     }
 };
 
@@ -149,6 +165,36 @@ pub const App = struct {
         policy_msg(app, policy_sel, 0);
 
         return App{ .handle = app.? };
+    }
+
+    pub fn pollEvents(self: App) void {
+        const next_sel = objc.getSelector("nextEventMatchingMask:untilDate:inMode:dequeue:");
+        const send_sel = objc.getSelector("sendEvent:");
+        const update_sel = objc.getSelector("updateWindows");
+
+        const any_event: u64 = 0xFFFFFFFFFFFFFFFF;
+        const mode = objc.createNSString("kCFRunLoopDefaultMode");
+
+        const NextFn = *const fn (?objc.Object, ?objc.Selector, u64, ?objc.Object, ?objc.Object, bool) callconv(.c) ?objc.Object;
+        const next_msg: NextFn = @ptrCast(&objc.objc_msgSend);
+
+        const SendFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
+        const send_msg: SendFn = @ptrCast(&objc.objc_msgSend);
+
+        const UpdateFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;
+        const update_msg: UpdateFn = @ptrCast(&objc.objc_msgSend);
+
+        // Process all pending events
+        while (true) {
+            const event = next_msg(self.handle, next_sel, any_event, null, mode, true);
+            if (event) |e| {
+                send_msg(self.handle, send_sel, e);
+            } else {
+                break;
+            }
+        }
+
+        update_msg(self.handle, update_sel);
     }
 
     pub fn run(self: App) void {

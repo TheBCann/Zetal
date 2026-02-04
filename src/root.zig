@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const objc = @import("objc.zig");
 pub const window = @import("window.zig");
+pub const render = @import("render/root.zig");
 
 // --- Metal C-Bindings ---
 extern "Metal" fn MTLCreateSystemDefaultDevice() ?*anyopaque;
@@ -94,6 +95,22 @@ pub const MetalCommandBuffer = struct {
         const raw_encoder = objc.objc_msgSend(self.handle, sel);
         if (raw_encoder) |enc| return MetalComputeCommandEncoder{ .handle = enc };
         return null;
+    }
+
+    pub fn createRenderCommandEncoder(self: MetalCommandBuffer, desc: render.MetalRenderPassDescriptor) ?render.MetalRenderCommandEncoder {
+        const sel = objc.getSelector("renderCommandEncoderWithDescriptor:");
+        const CreateFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) ?objc.Object;
+        const msg: CreateFn = @ptrCast(&objc.objc_msgSend);
+        const ptr = msg(self.handle, sel, desc.handle);
+        if (ptr) |p| return render.MetalRenderCommandEncoder{ .handle = p };
+        return null;
+    }
+
+    pub fn presentDrawable(self: MetalCommandBuffer, drawable: objc.Object) void {
+        const sel = objc.getSelector("presentDrawable:");
+        const PresFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
+        const msg: PresFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, drawable);
     }
 
     pub fn commit(self: MetalCommandBuffer) void {
