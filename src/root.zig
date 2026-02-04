@@ -1,140 +1,119 @@
 const std = @import("std");
+const objc = @import("objc.zig"); // <--- The new import
 
-// --- Internal Objective-C Runtime Bindings ---
-extern "c" fn objc_getClass(name: [*]const u8) ?*anyopaque;
-extern "c" fn sel_registerName(name: [*]const u8) ?*anyopaque;
-extern "c" fn objc_msgSend(self: ?*anyopaque, op: ?*anyopaque, ...) ?*anyopaque;
-extern "c" fn MTLCreateSystemDefaultDevice() ?*anyopaque;
+// --- Metal C-Bindings ---
+extern "Metal" fn MTLCreateSystemDefaultDevice() ?*anyopaque;
 
-/// Internal helper to create an NSString from a Zig slice
-fn createNSString(content: []const u8) ?*anyopaque {
-    const ns_string_class = objc_getClass("NSString");
-    if (ns_string_class == null) return null;
-
-    const alloc_sel = sel_registerName("alloc");
-    const init_sel = sel_registerName("initWithBytes:length:encoding:");
-
-    // 1. Allocate
-    const raw_obj = objc_msgSend(ns_string_class, alloc_sel);
-
-    // 2. Define signature: (self, op, bytes, len, encoding)
-    const InitFn = *const fn (?*anyopaque, ?*anyopaque, [*]const u8, usize, u64) callconv(.c) ?*anyopaque;
-    const init_msg_send: InitFn = @ptrCast(&objc_msgSend);
-
-    // 3. Call (4 is UTF-8)
-    return init_msg_send(raw_obj, init_sel, content.ptr, content.len, 4);
-}
-
-/// Represents a 3D size (width, height, depth).
-/// Used for defining a threadgroup grids.
+// --- Helper Types ---
 pub const MTLSize = extern struct {
     width: u64,
     height: u64,
     depth: u64,
 };
 
-/// A handle to a specific function (shader) inside a library.
+pub const MTLResourceOptions = enum(u64) {
+    StorageModeShared = 0,
+};
+
+// --- Public Engine API ---
+
 pub const MetalFunction = struct {
-    handle: *anyopaque,
+    handle: objc.Object,
 };
 
-/// A compiled pipeline state ready for execution.
 pub const MetalComputePipelineState = struct {
-    handle: *anyopaque,
+    handle: objc.Object,
 };
 
-/// The object used to encode commads for a compute pass
+// NEW: The Buffer Struct
+pub const MetalBuffer = struct {
+    handle: objc.Object,
+
+    /// Returns a raw pointer to the memory (CPU-side).
+    pub fn contents(self: MetalBuffer) *anyopaque {
+        const sel = objc.getSelector("contents");
+        const ContentsFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) *anyopaque;
+        const msg_send: ContentsFn = @ptrCast(&objc.objc_msgSend);
+        return msg_send(self.handle, sel);
+    }
+};
+
 pub const MetalComputeCommandEncoder = struct {
-    handle: *anyopaque,
+    handle: objc.Object,
 
-    /// Sets the pipeline stats (the shader to run).
     pub fn setComputePipelineState(self: MetalComputeCommandEncoder, state: MetalComputePipelineState) void {
-        const sel = sel_registerName("setComputePipelineState:");
-
-        const SetPipeLineFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void;
-        const msg_send: SetPipeLineFn = @ptrCast(&objc_msgSend);
-
+        const sel = objc.getSelector("setComputePipelineState:");
+        const SetPipeLineFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
+        const msg_send: SetPipeLineFn = @ptrCast(&objc.objc_msgSend);
         msg_send(self.handle, sel, state.handle);
     }
 
-    /// Dispatches the threads.
-    /// Note: On ARM64, structs > 16 bytes (like MTLSize, which is 24) are passed by pointer implicitly
-    /// in the C ABI, but we define them by value here and let Zig/LLVM handle the ABI lowerng.
+    pub fn setBuffer(self: MetalComputeCommandEncoder, buffer: MetalBuffer, offset: u64, index: u64) void {
+        const sel = objc.getSelector("setBuffer:offset:atIndex:");
+        const SetBufFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object, u64, u64) callconv(.c) void;
+        const msg_send: SetBufFn = @ptrCast(&objc.objc_msgSend);
+        msg_send(self.handle, sel, buffer.handle, offset, index);
+    }
+
     pub fn dispatchThreadgroups(self: MetalComputeCommandEncoder, threadgroups: MTLSize, threadsPerThreadgroup: MTLSize) void {
-        const sel = sel_registerName("dispatchThreadgroups:threadsPerThreadgroup:");
-
-        const DispatchFn = *const fn (?*anyopaque, ?*anyopaque, MTLSize, MTLSize) callconv(.c) void;
-        const msg_send: DispatchFn = @ptrCast(&objc_msgSend);
-
+        const sel = objc.getSelector("dispatchThreadgroups:threadsPerThreadgroup:");
+        const DispatchFn = *const fn (?objc.Object, ?objc.Selector, MTLSize, MTLSize) callconv(.c) void;
+        const msg_send: DispatchFn = @ptrCast(&objc.objc_msgSend);
         msg_send(self.handle, sel, threadgroups, threadsPerThreadgroup);
     }
 
-    /// Declares that all commands for this encoder have been recorded
     pub fn endEncoding(self: MetalComputeCommandEncoder) void {
-        const sel = sel_registerName("endEncoding");
-        _ = objc_msgSend(self.handle, sel);
+        const sel = objc.getSelector("endEncoding");
+        _ = objc.objc_msgSend(self.handle, sel);
     }
 };
 
-/// A wrapper around a compiled Metal Library.
 pub const MetalLibrary = struct {
-    handle: *anyopaque,
+    handle: objc.Object,
 
-    /// Retrieves a function by name from the library.
     pub fn getFunction(self: MetalLibrary, name: []const u8) ?MetalFunction {
-        const ns_name = createNSString(name);
+        // We now use the helper from objc.zig
+        const ns_name = objc.createNSString(name);
         if (ns_name == null) return null;
 
-        const sel = sel_registerName("newFunctionWithName:");
-
-        // STRICT CASTING
-        const NewFuncFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-        const new_func_msg_send: NewFuncFn = @ptrCast(&objc_msgSend);
-
+        const sel = objc.getSelector("newFunctionWithName:");
+        const NewFuncFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) ?objc.Object;
+        const new_func_msg_send: NewFuncFn = @ptrCast(&objc.objc_msgSend);
         const raw_func = new_func_msg_send(self.handle, sel, ns_name);
 
-        if (raw_func) |f| {
-            return MetalFunction{ .handle = f };
-        }
+        if (raw_func) |f| return MetalFunction{ .handle = f };
         return null;
     }
 };
 
 pub const MetalCommandBuffer = struct {
-    handle: *anyopaque,
+    handle: objc.Object,
 
-    /// Creates a compute encoder to write commands into this buffer
     pub fn createComputeCommandEncoder(self: MetalCommandBuffer) ?MetalComputeCommandEncoder {
-        const sel = sel_registerName("computeCommandEncoder");
-        const raw_encoder = objc_msgSend(self.handle, sel);
-
-        if (raw_encoder) |enc| {
-            return MetalComputeCommandEncoder{ .handle = enc };
-        }
+        const sel = objc.getSelector("computeCommandEncoder");
+        const raw_encoder = objc.objc_msgSend(self.handle, sel);
+        if (raw_encoder) |enc| return MetalComputeCommandEncoder{ .handle = enc };
         return null;
     }
 
     pub fn commit(self: MetalCommandBuffer) void {
-        const sel = sel_registerName("commit");
-        _ = objc_msgSend(self.handle, sel);
+        const sel = objc.getSelector("commit");
+        _ = objc.objc_msgSend(self.handle, sel);
     }
 
     pub fn waitUntilCompleted(self: MetalCommandBuffer) void {
-        const sel = sel_registerName("waitUntilCompleted");
-        _ = objc_msgSend(self.handle, sel);
+        const sel = objc.getSelector("waitUntilCompleted");
+        _ = objc.objc_msgSend(self.handle, sel);
     }
 };
 
 pub const MetalCommandQueue = struct {
-    handle: *anyopaque,
+    handle: objc.Object,
 
     pub fn createCommandBuffer(self: MetalCommandQueue) ?MetalCommandBuffer {
-        const sel = sel_registerName("commandBuffer");
-        const raw_buffer = objc_msgSend(self.handle, sel);
-
-        if (raw_buffer) |buf| {
-            return MetalCommandBuffer{ .handle = buf };
-        }
+        const sel = objc.getSelector("commandBuffer");
+        const raw_buffer = objc.objc_msgSend(self.handle, sel);
+        if (raw_buffer) |buf| return MetalCommandBuffer{ .handle = buf };
         return null;
     }
 };
@@ -143,20 +122,18 @@ pub const MetalDevice = struct {
     handle: *anyopaque,
 
     pub fn createSystemDefault() ?MetalDevice {
-        const raw_ptr = MTLCreateSystemDefaultDevice();
-        if (raw_ptr) |ptr| {
-            return MetalDevice{ .handle = ptr };
-        }
+        const ptr = MTLCreateSystemDefaultDevice();
+        if (ptr) |p| return MetalDevice{ .handle = p };
         return null;
     }
 
     pub fn getName(self: MetalDevice) ?[]const u8 {
-        const name_sel = sel_registerName("name");
-        const ns_string = objc_msgSend(self.handle, name_sel);
+        const name_sel = objc.getSelector("name");
+        const ns_string = objc.objc_msgSend(self.handle, name_sel);
 
         if (ns_string) |str| {
-            const utf8_sel = sel_registerName("UTF8String");
-            const utf8_ptr = objc_msgSend(str, utf8_sel);
+            const utf8_sel = objc.getSelector("UTF8String");
+            const utf8_ptr = objc.objc_msgSend(str, utf8_sel);
             if (utf8_ptr) |ptr| {
                 return std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
             }
@@ -165,114 +142,96 @@ pub const MetalDevice = struct {
     }
 
     pub fn createCommandQueue(self: MetalDevice) ?MetalCommandQueue {
-        const queue_sel = sel_registerName("newCommandQueue");
-        const raw_queue = objc_msgSend(self.handle, queue_sel);
-
-        if (raw_queue) |q| {
-            return MetalCommandQueue{ .handle = q };
-        }
+        const sel = objc.getSelector("newCommandQueue");
+        const raw = objc.objc_msgSend(self.handle, sel);
+        if (raw) |q| return MetalCommandQueue{ .handle = q };
         return null;
     }
 
     pub fn createLibrary(self: MetalDevice, source: []const u8) ?MetalLibrary {
-        const ns_source = createNSString(source);
+        // Use helper from objc.zig
+        const ns_source = objc.createNSString(source);
         if (ns_source == null) return null;
 
-        const lib_sel = sel_registerName("newLibraryWithSource:options:error:");
-
-        // Define signature: (self, op, source, options, error)
-        const NewLibFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-        const new_lib_msg_send: NewLibFn = @ptrCast(&objc_msgSend);
+        const lib_sel = objc.getSelector("newLibraryWithSource:options:error:");
+        const NewLibFn = *const fn (?*anyopaque, ?objc.Selector, ?objc.Object, ?*anyopaque, ?*anyopaque) callconv(.c) ?objc.Object;
+        const new_lib_msg_send: NewLibFn = @ptrCast(&objc.objc_msgSend);
 
         const raw_lib = new_lib_msg_send(self.handle, lib_sel, ns_source, null, null);
-
-        if (raw_lib) |lib| {
-            return MetalLibrary{ .handle = lib };
-        }
+        if (raw_lib) |lib| return MetalLibrary{ .handle = lib };
         return null;
     }
 
-    /// Creates a Compute Pipeline State from a Function.
-    /// This is an expensive operation (compiles machine code for the GPU).
     pub fn createComputePipelineState(self: MetalDevice, func: MetalFunction) ?MetalComputePipelineState {
-        const sel = sel_registerName("newComputePipelineStateWithFunction:error:");
-
-        // Define signature: (self, op, function, error) -> pipelineState
-        const NewPipelineFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-        const pipeline_msg_send: NewPipelineFn = @ptrCast(&objc_msgSend);
-
+        const sel = objc.getSelector("newComputePipelineStateWithFunction:error:");
+        const NewPipelineFn = *const fn (?*anyopaque, ?objc.Selector, ?objc.Object, ?*anyopaque) callconv(.c) ?objc.Object;
+        const pipeline_msg_send: NewPipelineFn = @ptrCast(&objc.objc_msgSend);
         const raw_pipeline = pipeline_msg_send(self.handle, sel, func.handle, null);
 
-        if (raw_pipeline) |p| {
-            return MetalComputePipelineState{ .handle = p };
-        }
+        if (raw_pipeline) |p| return MetalComputePipelineState{ .handle = p };
+        return null;
+    }
+
+    pub fn createBuffer(self: MetalDevice, length: u64, options: MTLResourceOptions) ?MetalBuffer {
+        const sel = objc.getSelector("newBufferWithLength:options:");
+
+        const NewBufFn = *const fn (?*anyopaque, ?objc.Selector, u64, u64) callconv(.c) ?objc.Object;
+        const msg_send: NewBufFn = @ptrCast(&objc.objc_msgSend);
+
+        const ptr = msg_send(self.handle, sel, length, @intFromEnum(options));
+        if (ptr) |p| return MetalBuffer{ .handle = p };
         return null;
     }
 };
 
-// --- Library Tests ---
-test "Full GPU Lifecycle: Dispatch a Thread" {
+// --- Tests ---
+
+test "Compute Shader: Calculate 42 on GPU" {
     const device = MetalDevice.createSystemDefault().?;
     std.debug.print("\n    > GPU: {s}\n", .{device.getName().?});
 
-    // 1. Setup Pipeline
-    const shader_src =
-        \\ #include <metal_stdlib>
-        \\ using namespace metal;
-        \\ kernel void compute_main() { /* Hello from GPU */ }
-    ;
-    const library = device.createLibrary(shader_src).?;
-    const func = library.getFunction("compute_main").?;
-    const pipeline = device.createComputePipelineState(func).?;
-    std.debug.print("    > Pipeline Ready.\n", .{});
+    // 1. Create a Buffer for the result (Shared memory)
+    const buffer = device.createBuffer(4, .StorageModeShared).?;
 
-    // 2. Setup Command Stream
-    const queue = device.createCommandQueue().?;
-    const buffer = queue.createCommandBuffer().?;
+    //    Get pointer and initialize to 0.0
+    const ptr = @as(*f32, @ptrCast(@alignCast(buffer.contents())));
+    ptr.* = 0.0;
+    std.debug.print("    > Buffer initialized to: {d}\n", .{ptr.*});
 
-    // 3. Encode Commands
-    const encoder = buffer.createComputeCommandEncoder().?;
-    encoder.setComputePipelineState(pipeline);
-
-    // Dispatch 1 threadgroup with 1 thread (1x1x1)
-    const grid_size = MTLSize{ .width = 1, .height = 1, .depth = 1 };
-    const threadgroup_size = MTLSize{ .width = 1, .height = 1, .depth = 1 };
-
-    encoder.dispatchThreadgroups(grid_size, threadgroup_size);
-    encoder.endEncoding();
-    std.debug.print("    > Commands Encoded.\n", .{});
-
-    // 4. Submit
-    buffer.commit();
-    buffer.waitUntilCompleted();
-
-    std.debug.print("    > Execution Finished Successfully!\n", .{});
-}
-
-test "Compile Basic Shader" {
-    const device = MetalDevice.createSystemDefault().?;
-    std.debug.print("\n    > GPU: {s}\n", .{device.getName().?});
-
-    // Simple MSL Shader Source
-    // This doesn't do anything useful yet, but it's valid code.
+    // 2. Setup Pipeline with Shader that writes to the buffer
     const shader_src =
         \\ #include <metal_stdlib>
         \\ using namespace metal;
         \\ 
-        \\ kernel void compute_main() { /* Do nothing */ }
+        \\ // Argument table index 0 maps to setBuffer(..., 0)
+        \\ kernel void compute_main(device float *result [[buffer(0)]]) {
+        \\     result[0] = 42.0;
+        \\ }
     ;
-
-    // Compile Library
     const library = device.createLibrary(shader_src).?;
-    std.debug.print("    > Library compiled.\n", .{});
+    const func = library.getFunction("compute_main").?;
+    const pipeline = device.createComputePipelineState(func).?;
 
-    // Get Function
-    const func = library.getFunction("compute_main");
-    try std.testing.expect(func != null);
-    std.debug.print("    > Function 'compute_main' found,\n", .{});
+    // 3. Encode Commands
+    const queue = device.createCommandQueue().?;
+    const cmd_buffer = queue.createCommandBuffer().?;
+    const encoder = cmd_buffer.createComputeCommandEncoder().?;
 
-    // Create Pipeline State
-    const pipeline = device.createComputePipelineState(func.?);
-    try std.testing.expect(pipeline != null);
-    std.debug.print("    > Compute Pipeline State created! Ready to dispatch.\n", .{});
+    encoder.setComputePipelineState(pipeline);
+
+    // BIND THE BUFFER TO INDEX 0
+    encoder.setBuffer(buffer, 0, 0);
+
+    const grid_size = MTLSize{ .width = 1, .height = 1, .depth = 1 };
+    const threadgroup_size = MTLSize{ .width = 1, .height = 1, .depth = 1 };
+    encoder.dispatchThreadgroups(grid_size, threadgroup_size);
+    encoder.endEncoding();
+
+    // 4. Submit and Wait
+    cmd_buffer.commit();
+    cmd_buffer.waitUntilCompleted();
+
+    // 5. Verify Result
+    std.debug.print("    > GPU calculation finished. Result in buffer: {d}\n", .{ptr.*});
+    try std.testing.expectEqual(@as(f32, 42.0), ptr.*);
 }
