@@ -1,5 +1,6 @@
 const std = @import("std");
-const objc = @import("objc.zig"); // <--- The new import
+pub const objc = @import("objc.zig");
+pub const window = @import("window.zig");
 
 // --- Metal C-Bindings ---
 extern "Metal" fn MTLCreateSystemDefaultDevice() ?*anyopaque;
@@ -25,7 +26,6 @@ pub const MetalComputePipelineState = struct {
     handle: objc.Object,
 };
 
-// NEW: The Buffer Struct
 pub const MetalBuffer = struct {
     handle: objc.Object,
 
@@ -148,7 +148,7 @@ pub const MetalDevice = struct {
         return null;
     }
 
-    pub fn createLibrary(self: MetalDevice, source: []const u8) ?MetalLibrary {
+    pub fn createLibrary(self: MetalDevice, source: [:0]const u8) ?MetalLibrary {
         // Use helper from objc.zig
         const ns_source = objc.createNSString(source);
         if (ns_source == null) return null;

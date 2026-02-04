@@ -3,32 +3,35 @@ const std = @import("std");
 pub const Object = *anyopaque;
 pub const Selector = *anyopaque;
 
-// The raw C imports
 pub extern "c" fn sel_registerName(str: [*:0]const u8) ?Selector;
 pub extern "c" fn objc_getClass(name: [*]const u8) ?Object;
 pub extern "c" fn objc_msgSend(self: ?Object, op: ?Selector, ...) ?Object;
 
-/// Helper to get a Selector (like a method name)
 pub fn getSelector(name: [:0]const u8) ?Selector {
-    return sel_registerName(name);
+    const sel = sel_registerName(name);
+    if (sel == null) {
+        std.debug.print("ERROR: Failed to register selector: {s}\n", .{name});
+    }
+    return sel;
 }
 
-/// Helper to create an NSString from a Zig slice
-/// We moved this here because it's purely a helper, not core Engine logic.
-pub fn createNSString(content: []const u8) ?Object {
+// CHANGED: Uses robust factory method 'stringWithUTF8String:'
+// Requires [:0]const u8 (null-terminated slice)
+pub fn createNSString(content: [:0]const u8) ?Object {
     const ns_string_class = objc_getClass("NSString");
     if (ns_string_class == null) return null;
 
-    const alloc_sel = getSelector("alloc");
-    const init_sel = getSelector("initWithBytes:length:encoding:");
+    const sel = getSelector("stringWithUTF8String:");
 
-    // 1. Allocate
-    // We can use the raw msgSend here because we are inside the "unsafe" file
-    const raw_obj = objc_msgSend(ns_string_class, alloc_sel);
+    // Signature: (Class, SEL, const char*) -> NSString*
+    const FactoryFn = *const fn (?Object, ?Selector, [*:0]const u8) callconv(.c) ?Object;
+    const factory_msg: FactoryFn = @ptrCast(&objc_msgSend);
 
-    // 2. Initialize
-    const InitFn = *const fn (?Object, ?Selector, [*]const u8, usize, u64) callconv(.c) ?Object;
-    const init_msg_send: InitFn = @ptrCast(&objc_msgSend);
+    const raw_string = factory_msg(ns_string_class, sel, content.ptr);
 
-    return init_msg_send(raw_obj, init_sel, content.ptr, content.len, 4); // 4 is UTF-8
+    if (raw_string == null) {
+        std.debug.print("ERROR: NSString.stringWithUTF8String returned nil for '{s}'\n", .{content});
+    }
+
+    return raw_string;
 }

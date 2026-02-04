@@ -4,36 +4,47 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // 1. Create the module
-    const root_module = b.createModule(.{
+    // ============================================================
+    // 1. THE LIBRARY (Zetal Engine)
+    //    Powered by src/root.zig
+    // ============================================================
+    const zetal_lib = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // 2. Link Frameworks to the MODULE (New API)
-    // We pass .{} because the third argument 'options' is mandatory now
-    root_module.linkFramework("Foundation", .{});
-    root_module.linkFramework("Metal", .{});
-    root_module.linkFramework("AppKit", .{});
-    root_module.linkSystemLibrary("objc", .{});
+    // Link System Frameworks to the Library
+    zetal_lib.linkFramework("Foundation", .{});
+    zetal_lib.linkFramework("Metal", .{});
+    zetal_lib.linkFramework("AppKit", .{});
+    zetal_lib.linkSystemLibrary("objc", .{});
 
-    // 3. Create the executable using the module
+    // ============================================================
+    // 2. THE APP (Game Demo)
+    //    Powered by src/main.zig
+    // ============================================================
+
+    // Create a module for the app executable
+    const app_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Import the Zetal library so main.zig can do: @import("Zetal")
+    app_mod.addImport("Zetal", zetal_lib);
+
     const exe = b.addExecutable(.{
         .name = "Zetal",
-        .root_module = root_module,
+        .root_module = app_mod,
     });
 
     b.installArtifact(exe);
 
-    const unit_tests = b.addTest(.{
-        .root_module = root_module,
-    });
-
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
-
+    // ============================================================
+    // 3. RUN STEP
+    // ============================================================
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
@@ -43,4 +54,15 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    // ============================================================
+    // 4. TEST STEP
+    // ============================================================
+    const unit_tests = b.addTest(.{
+        .root_module = zetal_lib, // Run tests on the library module
+    });
+
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_unit_tests.step);
 }
