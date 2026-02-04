@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     root_module.linkFramework("Foundation", .{});
     root_module.linkFramework("Metal", .{});
     root_module.linkFramework("AppKit", .{});
+    root_module.linkSystemLibrary("objc", .{});
 
     // 3. Create the executable using the module
     const exe = b.addExecutable(.{
