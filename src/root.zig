@@ -17,24 +17,46 @@ fn createNSString(content: []const u8) ?*anyopaque {
     // 1. Allocate
     const raw_obj = objc_msgSend(ns_string_class, alloc_sel);
 
-    // 2. Define the exact function signature for the init method
-    //    args: (self, op, bytes, len, encoding)
+    // 2. Define signature: (self, op, bytes, len, encoding)
     const InitFn = *const fn (?*anyopaque, ?*anyopaque, [*]const u8, usize, u64) callconv(.c) ?*anyopaque;
-
-    // 3. Cast objc_msgSend to this signature
-    //    We use @ptrCast to tell Zig: "Treat this address as a function with THESE arguments"
     const init_msg_send: InitFn = @ptrCast(&objc_msgSend);
 
-    // 4. Call the typed function
-    //    4 is NSUTF8StringEncoding
+    // 3. Call (4 is UTF-8)
     return init_msg_send(raw_obj, init_sel, content.ptr, content.len, 4);
 }
 
-/// A wrapper around a compiled Metal Library (a collection of shaders).
+/// A handle to a specific function (shader) inside a library.
+pub const MetalFunction = struct {
+    handle: *anyopaque,
+};
+
+/// A compiled pipeline state ready for execution.
+pub const MetalComputePipelineState = struct {
+    handle: *anyopaque,
+};
+
+/// A wrapper around a compiled Metal Library.
 pub const MetalLibrary = struct {
     handle: *anyopaque,
 
-    // In the future, we will add getFunction() here
+    /// Retrieves a function by name from the library.
+    pub fn getFunction(self: MetalLibrary, name: []const u8) ?MetalFunction {
+        const ns_name = createNSString(name);
+        if (ns_name == null) return null;
+
+        const sel = sel_registerName("newFunctionWithName:");
+
+        // STRICT CASTING
+        const NewFuncFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+        const new_func_msg_send: NewFuncFn = @ptrCast(&objc_msgSend);
+
+        const raw_func = new_func_msg_send(self.handle, sel, ns_name);
+
+        if (raw_func) |f| {
+            return MetalFunction{ .handle = f };
+        }
+        return null;
+    }
 };
 
 pub const MetalCommandBuffer = struct {
@@ -100,33 +122,37 @@ pub const MetalDevice = struct {
         return null;
     }
 
-    /// Compiles a source string (MSL) into a Library.
     pub fn createLibrary(self: MetalDevice, source: []const u8) ?MetalLibrary {
-        // 1. Convert Zig string -> NSString
         const ns_source = createNSString(source);
         if (ns_source == null) return null;
 
-        // 2. Prepare selector
         const lib_sel = sel_registerName("newLibraryWithSource:options:error:");
 
-        // 3. Define the exact function signature
-        //    args: (self, op, source, options, error)
-        const NewLibFn = *const fn (
-            ?*anyopaque,
-            ?*anyopaque,
-            ?*anyopaque,
-            ?*anyopaque,
-            ?*anyopaque,
-        ) callconv(.c) ?*anyopaque;
-
-        // 4. Cast objc_msgSend
+        // Define signature: (self, op, source, options, error)
+        const NewLibFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
         const new_lib_msg_send: NewLibFn = @ptrCast(&objc_msgSend);
 
-        // 5. Call
         const raw_lib = new_lib_msg_send(self.handle, lib_sel, ns_source, null, null);
 
         if (raw_lib) |lib| {
             return MetalLibrary{ .handle = lib };
+        }
+        return null;
+    }
+
+    /// Creates a Compute Pipeline State from a Function.
+    /// This is an expensive operation (compiles machine code for the GPU).
+    pub fn createComputePipelineState(self: MetalDevice, func: MetalFunction) ?MetalComputePipelineState {
+        const sel = sel_registerName("newComputePipelineStateWithFunction:error:");
+
+        // Define signature: (self, op, function, error) -> pipelineState
+        const NewPipelineFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+        const pipeline_msg_send: NewPipelineFn = @ptrCast(&objc_msgSend);
+
+        const raw_pipeline = pipeline_msg_send(self.handle, sel, func.handle, null);
+
+        if (raw_pipeline) |p| {
+            return MetalComputePipelineState{ .handle = p };
         }
         return null;
     }
@@ -163,13 +189,20 @@ test "Compile Basic Shader" {
         \\ #include <metal_stdlib>
         \\ using namespace metal;
         \\ 
-        \\ kernel void compute_main() {
-        \\     // Do nothing
-        \\ }
+        \\ kernel void compute_main() { /* Do nothing */ }
     ;
 
-    const library = device.createLibrary(shader_src);
-    try std.testing.expect(library != null);
+    // Compile Library
+    const library = device.createLibrary(shader_src).?;
+    std.debug.print("    > Library compiled.\n", .{});
 
-    std.debug.print("    > Successfully compiled MSL shader!\n", .{});
+    // Get Function
+    const func = library.getFunction("compute_main");
+    try std.testing.expect(func != null);
+    std.debug.print("    > Function 'compute_main' found,\n", .{});
+
+    // Create Pipeline State
+    const pipeline = device.createComputePipelineState(func.?);
+    try std.testing.expect(pipeline != null);
+    std.debug.print("    > Compute Pipeline State created! Ready to dispatch.\n", .{});
 }
