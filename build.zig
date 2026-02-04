@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     zetal_lib.linkFramework("Metal", .{});
     zetal_lib.linkFramework("AppKit", .{});
     zetal_lib.linkSystemLibrary("objc", .{});
+    zetal_lib.linkFramework("QuartzCore", .{});
 
     // ============================================================
     // 2. THE APP (Game Demo)
