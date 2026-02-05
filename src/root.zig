@@ -226,3 +226,4 @@ test {
     std.testing.refAllDecls(@import("render/math.zig"));
     std.testing.refAllDecls(@import("window.zig"));
 }
+pub const engine = @import("engine.zig");
