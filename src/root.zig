@@ -2,6 +2,7 @@ const std = @import("std");
 pub const objc = @import("objc.zig");
 pub const window = @import("window.zig");
 pub const scene = @import("scene.zig");
+pub const texture = @import("texture.zig");
 pub const render = @import("render/root.zig");
 
 extern "Metal" fn MTLCreateSystemDefaultDevice() ?*anyopaque;

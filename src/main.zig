@@ -18,7 +18,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (Scene Mode)...\n", .{});
+    try stdout.print("Starting Zetal Engine (Texture Loading)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
@@ -28,38 +28,35 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("Model loaded.\n", .{});
     try stdout.flush();
 
-    // 2. Initialize Scene
-    var scene = try Zetal.scene.Scene.init(allocator);
+    // 2. Load Texture (NEW)
+    try stdout.print("Loading test.ppm...\n", .{});
+    try stdout.flush();
+    const ppm = try Zetal.texture.loadPPM(allocator, "test.ppm", io);
+    defer ppm.deinit(); // Clean up CPU memory after upload
+    try stdout.print("Texture loaded: {d}x{d}\n", .{ ppm.width, ppm.height });
+    try stdout.flush();
 
-    // Spawn 100 Cubes in a Helix
+    // 3. Initialize Scene
+    var scene = try Zetal.scene.Scene.init(allocator);
     var i: usize = 0;
     while (i < 100) : (i += 1) {
         const fi = @as(f32, @floatFromInt(i));
         const angle = fi * 0.5;
         const radius = 2.0 + (fi * 0.1);
-
         const x = @cos(angle) * radius;
         const z = @sin(angle) * radius - 10.0;
         const y = (fi * 0.2) - 10.0;
-
         try scene.add(x, y, z);
     }
 
-    // 3. Assets Setup
-    const tex_width = 64;
-    const tex_height = 64;
-    const texture = core.device.createTexture(tex_width, tex_height, 70).?;
+    // 4. Upload Texture to GPU
+    // RGBA8Unorm = 70
+    const texture = core.device.createTexture(ppm.width, ppm.height, 70).?;
 
-    var raw_pixels: [tex_width * tex_height]u32 = undefined;
-    for (0..tex_height) |y| {
-        for (0..tex_width) |x| {
-            const index = y * tex_width + x;
-            const is_white = ((x / 8) + (y / 8)) % 2 == 0;
-            raw_pixels[index] = if (is_white) 0xFFFFFFFF else 0xFF808080;
-        }
-    }
-    const region = Zetal.MTLRegion{ .origin = .{ .x = 0, .y = 0, .z = 0 }, .size = .{ .width = tex_width, .height = tex_height, .depth = 1 } };
-    texture.replaceRegion(region, @ptrCast(&raw_pixels), tex_width * 4);
+    const region = Zetal.MTLRegion{ .origin = .{ .x = 0, .y = 0, .z = 0 }, .size = .{ .width = ppm.width, .height = ppm.height, .depth = 1 } };
+
+    // Bytes per row = Width * 4 (RGBA)
+    texture.replaceRegion(region, @ptrCast(ppm.pixels.ptr), ppm.width * 4);
 
     const library = core.device.createLibrary(Zetal.render.shader.triangle_source).?;
     const vert_fn = library.getFunction("vertex_main").?;
@@ -85,15 +82,13 @@ pub fn main(init: std.process.Init) !void {
     const index_ptr = @as([*]u32, @ptrCast(@alignCast(index_buffer.contents())));
     @memcpy(index_ptr[0..model.indices.len], model.indices);
 
-    try stdout.print("Engine Ready. Fleet Deployed.\n", .{});
+    try stdout.print("Engine Ready.\n", .{});
     try stdout.flush();
 
     var cam_x: f32 = 0.0;
     var cam_y: f32 = 0.0;
     var cam_z: f32 = 0.0;
     const speed: f32 = 0.1;
-
-    // NEW: Capture Start Time using correct API
     const start_time = try Io.Clock.Timestamp.now(io, .awake);
 
     while (true) {
@@ -105,11 +100,9 @@ pub fn main(init: std.process.Init) !void {
         if (core.app.isPressed(.Q)) cam_y += speed;
         if (core.app.isPressed(.E)) cam_y -= speed;
 
-        // NEW: Calculate elapsed time for animation
         const now = try Io.Clock.Timestamp.now(io, .awake);
         const elapsed = start_time.durationTo(now);
-        const time_ms = elapsed.raw.toMilliseconds();
-        const time_sec = @as(f32, @floatFromInt(time_ms)) / 1000.0;
+        const time_sec = @as(f32, @floatFromInt(elapsed.raw.toMilliseconds())) / 1000.0;
 
         const view_mat = Math.Mat4x4.translate(cam_x, cam_y, cam_z);
         const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), 800.0 / 600.0, 0.1, 100.0);
@@ -125,17 +118,13 @@ pub fn main(init: std.process.Init) !void {
 
             for (scene.objects.items, 0..) |obj, idx| {
                 const spin = obj.rot_y + (@as(f32, @floatFromInt(idx)) * 0.05);
-
-                // USE time_sec here
                 const rot_mat = Math.Mat4x4.rotateY(spin + time_sec);
-
                 var final_model = rot_mat;
                 final_model.columns[3][0] = obj.x;
                 final_model.columns[3][1] = obj.y;
                 final_model.columns[3][2] = obj.z;
 
                 const mvp = Math.Mat4x4.mul(model_view, final_model);
-
                 frame.enc.setVertexBytes(&mvp, @sizeOf(Math.Mat4x4), 1);
                 frame.enc.drawIndexedPrimitives(.Triangle, model.indices.len, .UInt32, index_buffer.handle, 0);
             }
