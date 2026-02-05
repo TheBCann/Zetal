@@ -62,6 +62,27 @@ pub const MetalRenderPassDescriptor = struct {
 pub const MetalRenderCommandEncoder = struct {
     handle: objc.Object,
 
+    pub fn setRenderPipelineState(self: MetalRenderCommandEncoder, pipelineState: objc.Object) void {
+        const sel = objc.getSelector("setRenderPipelineState:");
+        const SetFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
+        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, pipelineState);
+    }
+
+    pub fn setVertexBuffer(self: MetalRenderCommandEncoder, buffer: objc.Object, offset: u64, index: u64) void {
+        const sel = objc.getSelector("setVertexBuffer:offset:atIndex:");
+        const SetBufFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object, u64, u64) callconv(.c) void;
+        const msg: SetBufFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, buffer, offset, index);
+    }
+
+    pub fn drawPrimitives(self: MetalRenderCommandEncoder, primType: types.MTLPrimitiveType, start: u64, count: u64) void {
+        const sel = objc.getSelector("drawPrimitives:vertexStart:vertexCount:");
+        const DrawFn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64) callconv(.c) void;
+        const msg: DrawFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, @intFromEnum(primType), start, count);
+    }
+
     pub fn endEncoding(self: MetalRenderCommandEncoder) void {
         const sel = objc.getSelector("endEncoding");
         const EndFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;

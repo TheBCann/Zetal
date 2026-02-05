@@ -72,7 +72,7 @@ pub const MetalComputeCommandEncoder = struct {
 pub const MetalLibrary = struct {
     handle: objc.Object,
 
-    pub fn getFunction(self: MetalLibrary, name: []const u8) ?MetalFunction {
+    pub fn getFunction(self: MetalLibrary, name: [:0]const u8) ?MetalFunction {
         // We now use the helper from objc.zig
         const ns_name = objc.createNSString(name);
         if (ns_name == null) return null;
@@ -197,6 +197,20 @@ pub const MetalDevice = struct {
 
         const ptr = msg_send(self.handle, sel, length, @intFromEnum(options));
         if (ptr) |p| return MetalBuffer{ .handle = p };
+        return null;
+    }
+
+    pub fn createRenderPipelineState(self: MetalDevice, desc: render.MetalRenderPipelineDescriptor) ?render.MetalRenderPipeLineState {
+        const sel = objc.getSelector("newRenderPipelineStateWithDescriptor:error:");
+        const NewPipeFn = *const fn (?*anyopaque, ?objc.Selector, ?objc.Object, ?*anyopaque) callconv(.c) ?objc.Object;
+        const msg: NewPipeFn = @ptrCast(&objc.objc_msgSend);
+
+        // Pass null for error for now
+        const ptr = msg(self.handle, sel, desc.handle, null);
+
+        if (ptr) |p| return render.MetalRenderPipeLineState{ .handle = p };
+
+        std.debug.print("ERROR: Failed to create Render Pipeline State!\n", .{});
         return null;
     }
 };
