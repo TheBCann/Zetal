@@ -1,16 +1,37 @@
 const std = @import("std");
 
 pub const Vertex = extern struct {
-    position: [4]f32, // Changed to 4 floats for 16-byte alignment
+    position: [4]f32,
     color: [4]f32,
 };
 
-// Define the Triangle geometry
 pub const triangle_vertices = [_]Vertex{
-    // Top (Red) -- Added 4th float (1.0) to position
-    .{ .position = .{ 0.0, 0.5, 0.0, 1.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-    // Bottom Left (Green)
-    .{ .position = .{ -0.5, -0.5, 0.0, 1.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } },
-    // Bottom Right (Blue)
-    .{ .position = .{ 0.5, -0.5, 0.0, 1.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } },
+    // BASE (Dark Gray) - Triangle 1
+    .{ .position = .{ -0.5, -0.5, 0.5, 1.0 }, .color = .{ 0.2, 0.2, 0.2, 1.0 } },
+    .{ .position = .{ 0.5, -0.5, 0.5, 1.0 }, .color = .{ 0.2, 0.2, 0.2, 1.0 } },
+    .{ .position = .{ -0.5, -0.5, -0.5, 1.0 }, .color = .{ 0.2, 0.2, 0.2, 1.0 } },
+    // BASE (Dark Gray) - Triangle 2
+    .{ .position = .{ 0.5, -0.5, 0.5, 1.0 }, .color = .{ 0.2, 0.2, 0.2, 1.0 } },
+    .{ .position = .{ 0.5, -0.5, -0.5, 1.0 }, .color = .{ 0.2, 0.2, 0.2, 1.0 } },
+    .{ .position = .{ -0.5, -0.5, -0.5, 1.0 }, .color = .{ 0.2, 0.2, 0.2, 1.0 } },
+
+    // FRONT FACE (Red)
+    .{ .position = .{ 0.0, 0.5, 0.0, 1.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } }, // Top
+    .{ .position = .{ -0.5, -0.5, 0.5, 1.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } }, // Left
+    .{ .position = .{ 0.5, -0.5, 0.5, 1.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } }, // Right
+
+    // RIGHT FACE (Green)
+    .{ .position = .{ 0.0, 0.5, 0.0, 1.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } }, // Top
+    .{ .position = .{ 0.5, -0.5, 0.5, 1.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } }, // Left
+    .{ .position = .{ 0.5, -0.5, -0.5, 1.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } }, // Right
+
+    // BACK FACE (Blue)
+    .{ .position = .{ 0.0, 0.5, 0.0, 1.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } }, // Top
+    .{ .position = .{ 0.5, -0.5, -0.5, 1.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } }, // Left
+    .{ .position = .{ -0.5, -0.5, -0.5, 1.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } }, // Right
+
+    // LEFT FACE (Yellow)
+    .{ .position = .{ 0.0, 0.5, 0.0, 1.0 }, .color = .{ 1.0, 1.0, 0.0, 1.0 } }, // Top
+    .{ .position = .{ -0.5, -0.5, -0.5, 1.0 }, .color = .{ 1.0, 1.0, 0.0, 1.0 } }, // Left
+    .{ .position = .{ -0.5, -0.5, 0.5, 1.0 }, .color = .{ 1.0, 1.0, 0.0, 1.0 } }, // Right
 };
