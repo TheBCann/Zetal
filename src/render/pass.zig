@@ -4,7 +4,6 @@ const types = @import("types.zig");
 
 pub const MetalRenderPassDescriptor = struct {
     handle: objc.Object,
-
     pub fn create() ?MetalRenderPassDescriptor {
         const class = objc.objc_getClass("MTLRenderPassDescriptor");
         const sel = objc.getSelector("renderPassDescriptor");
@@ -14,63 +13,50 @@ pub const MetalRenderPassDescriptor = struct {
         if (ptr) |p| return MetalRenderPassDescriptor{ .handle = p };
         return null;
     }
-
     pub fn setColorAttachment(self: MetalRenderPassDescriptor, index: u64, texture: objc.Object, loadAction: types.MTLLoadAction, storeAction: types.MTLStoreAction, clearColor: types.MTLClearColor) void {
         const attach_sel = objc.getSelector("colorAttachments");
         const AttachFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
         const attach_msg: AttachFn = @ptrCast(&objc.objc_msgSend);
         const attachments = attach_msg(self.handle, attach_sel);
-
         const get_sel = objc.getSelector("objectAtIndexedSubscript:");
         const GetFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) ?objc.Object;
         const get_msg: GetFn = @ptrCast(&objc.objc_msgSend);
-        const attachment = get_msg(attachments, get_sel, index);
-
-        if (attachment) |att| {
+        if (get_msg(attachments, get_sel, index)) |att| {
             const setTex_sel = objc.getSelector("setTexture:");
             const SetTexFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
             const set_tex: SetTexFn = @ptrCast(&objc.objc_msgSend);
             set_tex(att, setTex_sel, texture);
-
             const setLoad_sel = objc.getSelector("setLoadAction:");
             const SetLoadFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
             const set_load: SetLoadFn = @ptrCast(&objc.objc_msgSend);
             set_load(att, setLoad_sel, @intFromEnum(loadAction));
-
             const setStore_sel = objc.getSelector("setStoreAction:");
             const SetStoreFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
             const set_store: SetStoreFn = @ptrCast(&objc.objc_msgSend);
             set_store(att, setStore_sel, @intFromEnum(storeAction));
-
             const setClear_sel = objc.getSelector("setClearColor:");
             const SetClearFn = *const fn (?objc.Object, ?objc.Selector, types.MTLClearColor) callconv(.c) void;
             const set_clear: SetClearFn = @ptrCast(&objc.objc_msgSend);
             set_clear(att, setClear_sel, clearColor);
         }
     }
-
     pub fn setDepthAttachment(self: MetalRenderPassDescriptor, texture: objc.Object, clearDepth: f64) void {
         const attach_sel = objc.getSelector("depthAttachment");
         const AttachFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
         const attach_msg: AttachFn = @ptrCast(&objc.objc_msgSend);
-        const attachment = attach_msg(self.handle, attach_sel);
-
-        if (attachment) |att| {
+        if (attach_msg(self.handle, attach_sel)) |att| {
             const setTex_sel = objc.getSelector("setTexture:");
             const SetTexFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
             const set_tex: SetTexFn = @ptrCast(&objc.objc_msgSend);
             set_tex(att, setTex_sel, texture);
-
             const setLoad_sel = objc.getSelector("setLoadAction:");
             const SetLoadFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
             const set_load: SetLoadFn = @ptrCast(&objc.objc_msgSend);
-            set_load(att, setLoad_sel, 2); // 2 = Clear
-
+            set_load(att, setLoad_sel, 2);
             const setStore_sel = objc.getSelector("setStoreAction:");
             const SetStoreFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
             const set_store: SetStoreFn = @ptrCast(&objc.objc_msgSend);
             set_store(att, setStore_sel, 0);
-
             const setClear_sel = objc.getSelector("setClearDepth:");
             const SetClearFn = *const fn (objc.Object, ?objc.Selector, f64) callconv(.c) void;
             const set_clear: SetClearFn = @ptrCast(&objc.objc_msgSend);
@@ -82,46 +68,47 @@ pub const MetalRenderPassDescriptor = struct {
 pub const MetalRenderCommandEncoder = struct {
     handle: objc.Object,
 
-    // NEW: Function to bind texture to Fragment Shader
     pub fn setFragmentTexture(self: MetalRenderCommandEncoder, texture: objc.Object, index: u64) void {
         const sel = objc.getSelector("setFragmentTexture:atIndex:");
         const Fn = *const fn (objc.Object, ?objc.Selector, ?objc.Object, u64) callconv(.c) void;
         const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel, texture, index);
     }
-
     pub fn setDepthStencilState(self: MetalRenderCommandEncoder, state: objc.Object) void {
         const sel = objc.getSelector("setDepthStencilState:");
-        const SetFn = *const fn (objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        const Fn = *const fn (objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel, state);
     }
-
     pub fn setRenderPipelineState(self: MetalRenderCommandEncoder, pipelineState: objc.Object) void {
         const sel = objc.getSelector("setRenderPipelineState:");
-        const SetFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        const Fn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel, pipelineState);
     }
-
     pub fn setVertexBuffer(self: MetalRenderCommandEncoder, buffer: objc.Object, offset: u64, index: u64) void {
         const sel = objc.getSelector("setVertexBuffer:offset:atIndex:");
-        const SetBufFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object, u64, u64) callconv(.c) void;
-        const msg: SetBufFn = @ptrCast(&objc.objc_msgSend);
+        const Fn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object, u64, u64) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel, buffer, offset, index);
     }
-
     pub fn drawPrimitives(self: MetalRenderCommandEncoder, primType: types.MTLPrimitiveType, start: u64, count: u64) void {
         const sel = objc.getSelector("drawPrimitives:vertexStart:vertexCount:");
-        const DrawFn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64) callconv(.c) void;
-        const msg: DrawFn = @ptrCast(&objc.objc_msgSend);
+        const Fn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel, @intFromEnum(primType), start, count);
     }
-
     pub fn endEncoding(self: MetalRenderCommandEncoder) void {
         const sel = objc.getSelector("endEncoding");
-        const EndFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;
-        const msg: EndFn = @ptrCast(&objc.objc_msgSend);
+        const Fn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel);
+    }
+
+    pub fn drawIndexedPrimitives(self: MetalRenderCommandEncoder, primType: types.MTLPrimitiveType, indexCount: u64, indexType: types.MTLIndexType, indexBuffer: objc.Object, indexBufferOffset: u64) void {
+        const sel = objc.getSelector("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:");
+        const Fn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64, ?objc.Object, u64) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, @intFromEnum(primType), indexCount, @intFromEnum(indexType), indexBuffer, indexBufferOffset);
     }
 };

@@ -1,11 +1,10 @@
 const std = @import("std");
 
-// 252 = MTLPixelFormatDepth32Float
 pub const MTLPixelFormatDepth32Float: u64 = 252;
 
 pub const MTLCompareFunction = enum(u64) {
     Never = 0,
-    Less = 1, // Draw if new Z < old Z (Standard 3D)
+    Less = 1,
     Equal = 2,
     LessEqual = 3,
     Greater = 4,
@@ -14,17 +13,8 @@ pub const MTLCompareFunction = enum(u64) {
     Always = 7,
 };
 
-pub const MTLLoadAction = enum(u64) {
-    DontCare = 0,
-    Load = 1,
-    Clear = 2,
-};
-
-pub const MTLStoreAction = enum(u64) {
-    DontCare = 0,
-    Store = 1,
-    MultisampleResolve = 2,
-};
+pub const MTLLoadAction = enum(u64) { DontCare = 0, Load = 1, Clear = 2 };
+pub const MTLStoreAction = enum(u64) { DontCare = 0, Store = 1, MultisampleResolve = 2 };
 
 pub const MTLClearColor = extern struct {
     red: f64,
@@ -39,4 +29,10 @@ pub const MTLPrimitiveType = enum(u64) {
     LineStrip = 2,
     Triangle = 3,
     TriangleStrip = 4,
+};
+
+// NEW: Index Type
+pub const MTLIndexType = enum(u64) {
+    UInt16 = 0,
+    UInt32 = 1,
 };

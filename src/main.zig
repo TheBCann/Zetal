@@ -11,36 +11,32 @@ fn simpleSleep(ns: u64) void {
 }
 
 pub fn main(init: std.process.Init) !void {
-    // 1. Resources
     const allocator = init.arena.allocator();
     const io = init.io;
 
-    // Setup stdout with buffering
     var stdout_buf: [1024]u8 = undefined;
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (Model Loading)...\n", .{});
+    try stdout.print("Starting Zetal Engine (Indexed Drawing)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
 
-    // 2. Load Model
     try stdout.print("Loading cube.obj...\n", .{});
     try stdout.flush();
 
-    // Pass 'io' capability to loader
+    // Load Model (Deduplicated)
     const model = try Zetal.loader.loadObj(allocator, "cube.obj", io);
 
-    try stdout.print("Loaded {d} vertices.\n", .{model.vertices.len});
+    try stdout.print("Mesh Stats: {d} unique vertices, {d} indices.\n", .{ model.vertices.len, model.indices.len });
     try stdout.flush();
 
-    // 3. Texture
+    // Textures & Shader setup...
     const tex_width = 64;
     const tex_height = 64;
     const texture = core.device.createTexture(tex_width, tex_height, 70).?;
 
-    // Checkerboard
     var raw_pixels: [tex_width * tex_height]u32 = undefined;
     for (0..tex_height) |y| {
         for (0..tex_width) |x| {
@@ -68,10 +64,15 @@ pub fn main(init: std.process.Init) !void {
     depth_desc.setDepthWriteEnabled(true);
     const depth_state = core.device.createDepthStencilState(depth_desc).?;
 
-    // Upload Loaded Model
+    // --- UPLOAD VERTEX BUFFER ---
     const vertex_buffer = core.device.createBuffer(@sizeOf(Zetal.render.vertex.Vertex) * model.vertices.len, .StorageModeShared).?;
     const dest_ptr = @as([*]Zetal.render.vertex.Vertex, @ptrCast(@alignCast(vertex_buffer.contents())));
     @memcpy(dest_ptr[0..model.vertices.len], model.vertices);
+
+    // --- NEW: UPLOAD INDEX BUFFER ---
+    const index_buffer = core.device.createBuffer(@sizeOf(u32) * model.indices.len, .StorageModeShared).?;
+    const index_ptr = @as([*]u32, @ptrCast(@alignCast(index_buffer.contents())));
+    @memcpy(index_ptr[0..model.indices.len], model.indices);
 
     const uniform_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4), .StorageModeShared).?;
 
@@ -113,8 +114,8 @@ pub fn main(init: std.process.Init) !void {
             frame.enc.setVertexBuffer(uniform_buffer.handle, 0, 1);
             frame.enc.setFragmentTexture(texture.handle, 0);
 
-            // Draw Dynamic Count
-            frame.enc.drawPrimitives(.Triangle, 0, model.vertices.len);
+            // --- DRAW INDEXED PRIMITIVES ---
+            frame.enc.drawIndexedPrimitives(.Triangle, model.indices.len, .UInt32, index_buffer.handle, 0);
 
             frame.submit();
         }
