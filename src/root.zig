@@ -227,3 +227,4 @@ test {
     std.testing.refAllDecls(@import("window.zig"));
 }
 pub const engine = @import("engine.zig");
+pub const loader = @import("loader.zig");
