@@ -305,3 +305,8 @@ test "Compute Shader: Calculate 42 on GPU" {
     std.debug.print("    > GPU calculation finished. Result in buffer: {d}\n", .{ptr.*});
     try std.testing.expectEqual(@as(f32, 42.0), ptr.*);
 }
+
+test {
+    std.testing.refAllDecls(@import("render/math.zig"));
+    std.testing.refAllDecls(@import("window.zig"));
+}

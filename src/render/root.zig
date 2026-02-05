@@ -3,6 +3,7 @@ pub const pass = @import("pass.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const vertex = @import("vertex.zig");
 pub const shader = @import("shader.zig");
+pub const math = @import("math.zig");
 
 // Re-export common types for easier access
 pub const MTLClearColor = types.MTLClearColor;

@@ -60,6 +60,7 @@ Core Graphics
 
     [x] 3D Transformations (Uniform Buffers & Matrix Math)
 
+<<<<<<< HEAD
     [x] Depth Buffering (Z-Testing & Depth Textures)
 
 Next Steps
@@ -71,3 +72,18 @@ Next Steps
     [ ] Texture Mapping (Loading Images)
 
     [ ] Model Loading (OBJ/GLTF)
+||||||| parent of 85186d4 (feat: implemented WASD flying camera, input handling, and 3D math tests)
+    [ ] Draw a Triangle (The Hello World of Graphics)
+=======
+    [x] Depth Buffering (Z-Testing & Depth Textures)
+
+Next Steps
+
+    [x] Input Handling (Keyboard/Mouse State)
+
+    [x] Camera System (WASD Movement)
+
+    [ ] Texture Mapping (Loading Images)
+
+    [ ] Model Loading (OBJ/GLTF)
+>>>>>>> 85186d4 (feat: implemented WASD flying camera, input handling, and 3D math tests)

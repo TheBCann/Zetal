@@ -1,206 +1,205 @@
 const std = @import("std");
 const objc = @import("objc.zig");
 
-// --- Constants ---
-const NSWindowStyleMaskTitled = 1 << 0;
-const NSWindowStyleMaskClosable = 1 << 1;
-const NSWindowStyleMaskResizable = 1 << 3;
-const NSWindowStyleMaskMiniaturizable = 1 << 2;
-const DefaultStyle = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable;
-const NSBackingStoreBuffered = 2;
-
-// --- Helper Types ---
-pub const Rect = extern struct {
-    origin_x: f64,
-    origin_y: f64,
-    width: f64,
-    height: f64,
+pub const Keys = enum(u16) {
+    A = 0, S = 1, D = 2, W = 13,
+    Q = 12, E = 14,
+    Space = 49, Escape = 53,
+    Left = 123, Right = 124, Down = 125, Up = 126,
 };
 
-pub const Size = extern struct {
-    width: f64,
-    height: f64,
-};
+pub const App = struct {
+    handle: ?*anyopaque,
+    key_states: [128]bool = [_]bool{false} ** 128,
 
-// --- View Logic ---
-pub const MetalView = struct {
-    handle: objc.Object,
-    layer: objc.Object,
+    pub fn init() App {
+        const app_class = objc.objc_getClass("NSApplication");
+        const shared_sel = objc.getSelector("sharedApplication");
+        const SharedFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) ?*anyopaque;
+        const shared_msg: SharedFn = @ptrCast(&objc.objc_msgSend);
+        const app = shared_msg(app_class, shared_sel);
 
-    pub fn create(rect: Rect, device_handle: objc.Object) ?MetalView {
-        // 1. Create NSView
-        const ns_view_class = objc.objc_getClass("NSView");
-        const alloc_sel = objc.getSelector("alloc");
-        const AllocFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
-        const alloc_msg: AllocFn = @ptrCast(&objc.objc_msgSend);
-        const raw_view = alloc_msg(ns_view_class, alloc_sel);
+        const policy_sel = objc.getSelector("setActivationPolicy:");
+        const PolicyFn = *const fn (?*anyopaque, ?objc.Selector, isize) callconv(.c) bool;
+        const policy_msg: PolicyFn = @ptrCast(&objc.objc_msgSend);
+        _ = policy_msg(app, policy_sel, 0); 
 
-        const init_sel = objc.getSelector("initWithFrame:");
-        const InitFn = *const fn (?objc.Object, ?objc.Selector, Rect) callconv(.c) ?objc.Object;
-        const init_msg: InitFn = @ptrCast(&objc.objc_msgSend);
-        const view = init_msg(raw_view, init_sel, rect);
-
-        if (view == null) return null;
-
-        // 2. Create CAMetalLayer
-        const layer_class = objc.objc_getClass("CAMetalLayer");
-        const layer = alloc_msg(layer_class, alloc_sel);
-        const init_layer_sel = objc.getSelector("init");
-        const InitLayerFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
-        const init_layer_msg: InitLayerFn = @ptrCast(&objc.objc_msgSend);
-        _ = init_layer_msg(layer, init_layer_sel);
-
-        // 3. Configure Layer
-        // setDevice:
-        const setDevice_sel = objc.getSelector("setDevice:");
-        const SetDevFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-        const set_dev_msg: SetDevFn = @ptrCast(&objc.objc_msgSend);
-        set_dev_msg(layer, setDevice_sel, device_handle);
-
-        // setPixelFormat: (80 = BGRA8Unorm)
-        const setPixel_sel = objc.getSelector("setPixelFormat:");
-        const SetPixelFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
-        const set_pixel_msg: SetPixelFn = @ptrCast(&objc.objc_msgSend);
-        set_pixel_msg(layer, setPixel_sel, 80);
-
-        // 4. Attach Layer to View
-        // setLayer:
-        const setLayer_sel = objc.getSelector("setLayer:");
-        const SetLayerFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-        const set_layer_msg: SetLayerFn = @ptrCast(&objc.objc_msgSend);
-        set_layer_msg(view, setLayer_sel, layer);
-
-        // --- CRITICAL FIX: setFrame ---
-        // Force the layer to be the same size as the view.
-        // Without this, the layer defaults to 0x0 pixels (invisible).
-        const setFrame_sel = objc.getSelector("setFrame:");
-        const SetFrameFn = *const fn (?objc.Object, ?objc.Selector, Rect) callconv(.c) void;
-        const set_frame_msg: SetFrameFn = @ptrCast(&objc.objc_msgSend);
-        set_frame_msg(layer, setFrame_sel, rect);
-        // ------------------------------
-
-        // setWantsLayer: YES
-        const setWants_sel = objc.getSelector("setWantsLayer:");
-        const SetWantsFn = *const fn (?objc.Object, ?objc.Selector, bool) callconv(.c) void;
-        const set_wants_msg: SetWantsFn = @ptrCast(&objc.objc_msgSend);
-        set_wants_msg(view, setWants_sel, true);
-
-        return MetalView{ .handle = view.?, .layer = layer.? };
+        return App{ .handle = app };
     }
 
-    pub fn nextDrawable(self: MetalView) ?objc.Object {
-        const sel = objc.getSelector("nextDrawable");
-        const NextFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
-        const next_msg: NextFn = @ptrCast(&objc.objc_msgSend);
-        return next_msg(self.layer, sel);
+    pub fn isPressed(self: App, key: Keys) bool {
+        return self.key_states[@intFromEnum(key)];
+    }
+
+    pub fn pollEvents(self: *App) void {
+        const app = self.handle;
+        
+        const next_event_sel = objc.getSelector("nextEventMatchingMask:untilDate:inMode:dequeue:");
+        const type_sel = objc.getSelector("type");
+        const key_code_sel = objc.getSelector("keyCode");
+        
+        const str_class = objc.objc_getClass("NSString");
+        const str_sel = objc.getSelector("stringWithUTF8String:");
+        const StrFn = *const fn (?*anyopaque, ?objc.Selector, [*:0]const u8) callconv(.c) ?*anyopaque;
+        const str_msg: StrFn = @ptrCast(&objc.objc_msgSend);
+        const mode = str_msg(str_class, str_sel, "kCFRunLoopDefaultMode");
+
+        const NextEventFn = *const fn (?*anyopaque, ?objc.Selector, u64, ?*anyopaque, ?*anyopaque, bool) callconv(.c) ?*anyopaque;
+        const next_event: NextEventFn = @ptrCast(&objc.objc_msgSend);
+        
+        const TypeFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) u64;
+        const get_type: TypeFn = @ptrCast(&objc.objc_msgSend);
+
+        const KeyFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) u16;
+        const get_key: KeyFn = @ptrCast(&objc.objc_msgSend);
+
+        while (true) {
+            const event = next_event(app, next_event_sel, 18446744073709551615, null, mode, true);
+            
+            if (event) |e| {
+                const event_type = get_type(e, type_sel);
+                
+                if (event_type == 10) { // KeyDown
+                    const code = get_key(e, key_code_sel);
+                    if (code < 128) self.key_states[code] = true;
+                } else if (event_type == 11) { // KeyUp
+                    const code = get_key(e, key_code_sel);
+                    if (code < 128) self.key_states[code] = false;
+                }
+
+                const send_sel = objc.getSelector("sendEvent:");
+                const SendFn = *const fn (?*anyopaque, ?objc.Selector, ?*anyopaque) callconv(.c) void;
+                const send_msg: SendFn = @ptrCast(&objc.objc_msgSend);
+                send_msg(app, send_sel, e);
+            } else {
+                break; 
+            }
+        }
     }
 };
 
-// --- Window Logic ---
 pub const Window = struct {
-    handle: objc.Object,
+    handle: ?*anyopaque,
+
+    pub const Rect = extern struct {
+        x: f64, y: f64, w: f64, h: f64,
+    };
 
     pub fn create(width: f64, height: f64, title: [:0]const u8) ?Window {
-        const ns_window_class = objc.objc_getClass("NSWindow");
-        if (ns_window_class == null) return null;
-
+        const win_class = objc.objc_getClass("NSWindow");
         const alloc_sel = objc.getSelector("alloc");
-        const AllocFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
-        const alloc_msg: AllocFn = @ptrCast(&objc.objc_msgSend);
-        const raw_window = alloc_msg(ns_window_class, alloc_sel);
-
         const init_sel = objc.getSelector("initWithContentRect:styleMask:backing:defer:");
-        const rect = Rect{ .origin_x = 0, .origin_y = 0, .width = width, .height = height };
+        
+        const AllocFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) ?*anyopaque;
+        const alloc_msg: AllocFn = @ptrCast(&objc.objc_msgSend);
+        const raw_win = alloc_msg(win_class, alloc_sel);
 
-        const InitFn = *const fn (?objc.Object, ?objc.Selector, Rect, u64, u64, bool) callconv(.c) ?objc.Object;
+        const rect = Rect{ .x = 0, .y = 0, .w = width, .h = height };
+        const style: u64 = 1 | 2 | 4 | 8; 
+
+        const InitFn = *const fn (?*anyopaque, ?objc.Selector, Rect, u64, u64, bool) callconv(.c) ?*anyopaque;
         const init_msg: InitFn = @ptrCast(&objc.objc_msgSend);
+        const win = init_msg(raw_win, init_sel, rect, style, 2, false);
 
-        const win = init_msg(raw_window, init_sel, rect, DefaultStyle, NSBackingStoreBuffered, false);
+        const title_sel = objc.getSelector("setTitle:");
+        const str_class = objc.objc_getClass("NSString");
+        const str_sel = objc.getSelector("stringWithUTF8String:");
+        
+        const StrFn = *const fn (?*anyopaque, ?objc.Selector, [*:0]const u8) callconv(.c) ?*anyopaque;
+        const str_msg: StrFn = @ptrCast(&objc.objc_msgSend);
+        const ns_title = str_msg(str_class, str_sel, title);
 
-        if (win) |w| {
-            if (objc.createNSString(title)) |ns_title| {
-                const setTitle_sel = objc.getSelector("setTitle:");
-                const SetTitleFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-                const set_title_msg: SetTitleFn = @ptrCast(&objc.objc_msgSend);
-                set_title_msg(w, setTitle_sel, ns_title);
-            }
+        const SetTitleFn = *const fn (?*anyopaque, ?objc.Selector, ?*anyopaque) callconv(.c) void;
+        const set_title: SetTitleFn = @ptrCast(&objc.objc_msgSend);
+        set_title(win, title_sel, ns_title);
 
-            const center_sel = objc.getSelector("center");
-            const CenterFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;
-            const center_msg: CenterFn = @ptrCast(&objc.objc_msgSend);
-            center_msg(w, center_sel);
+        const center_sel = objc.getSelector("center");
+        _ = objc.objc_msgSend(win, center_sel);
 
-            const makeKey_sel = objc.getSelector("makeKeyAndOrderFront:");
-            const MakeKeyFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-            const make_key_msg: MakeKeyFn = @ptrCast(&objc.objc_msgSend);
-            make_key_msg(w, makeKey_sel, null);
+        const order_sel = objc.getSelector("makeKeyAndOrderFront:");
+        const OrderFn = *const fn (?*anyopaque, ?objc.Selector, ?*anyopaque) callconv(.c) void;
+        const order_msg: OrderFn = @ptrCast(&objc.objc_msgSend);
+        order_msg(win, order_sel, null);
 
-            return Window{ .handle = w };
-        }
-        return null;
+        return Window{ .handle = win };
     }
 
     pub fn setContentView(self: Window, view: MetalView) void {
         const sel = objc.getSelector("setContentView:");
-        const SetViewFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-        const set_view_msg: SetViewFn = @ptrCast(&objc.objc_msgSend);
-        set_view_msg(self.handle, sel, view.handle);
+        const SetFn = *const fn (?*anyopaque, ?objc.Selector, ?*anyopaque) callconv(.c) void;
+        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, view.handle);
     }
 };
 
-pub const App = struct {
-    handle: objc.Object,
+pub const MetalView = struct {
+    handle: ?*anyopaque,
 
-    pub fn init() App {
-        const ns_app_class = objc.objc_getClass("NSApplication");
-        const shared_sel = objc.getSelector("sharedApplication");
+    pub const Rect = extern struct {
+        origin_x: f64, origin_y: f64, width: f64, height: f64,
+    };
 
-        const SharedAppFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
-        const shared_app_msg: SharedAppFn = @ptrCast(&objc.objc_msgSend);
-        const app = shared_app_msg(ns_app_class, shared_sel);
+    pub fn create(frame: Rect, device_handle: *anyopaque) ?MetalView {
+        // NOTE: We stripped MTKView logic to ensure consistent fallback behavior for this fix
+        // In a production app, you would link MetalKit and use MTKView properly.
+        
+        const nsview_class = objc.objc_getClass("NSView");
+        const alloc_sel = objc.getSelector("alloc");
+        const init_sel = objc.getSelector("initWithFrame:");
+        
+        const AllocFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) ?*anyopaque;
+        const alloc_msg: AllocFn = @ptrCast(&objc.objc_msgSend);
+        const raw_view = alloc_msg(nsview_class, alloc_sel);
 
-        const policy_sel = objc.getSelector("setActivationPolicy:");
-        const PolicyFn = *const fn (?objc.Object, ?objc.Selector, isize) callconv(.c) void;
-        const policy_msg: PolicyFn = @ptrCast(&objc.objc_msgSend);
-        policy_msg(app, policy_sel, 0);
+        const InitFn = *const fn (?*anyopaque, ?objc.Selector, Rect) callconv(.c) ?*anyopaque;
+        const init_msg: InitFn = @ptrCast(&objc.objc_msgSend);
+        const view = init_msg(raw_view, init_sel, frame);
 
-        return App{ .handle = app.? };
+        const setWantsLayer_sel = objc.getSelector("setWantsLayer:");
+        const SetBoolFn = *const fn (?*anyopaque, ?objc.Selector, bool) callconv(.c) void;
+        const set_bool: SetBoolFn = @ptrCast(&objc.objc_msgSend);
+        set_bool(view, setWantsLayer_sel, true);
+
+        const layer_class = objc.objc_getClass("CAMetalLayer");
+        const layer_sel = objc.getSelector("layer");
+        const layer_msg: AllocFn = @ptrCast(&objc.objc_msgSend); 
+        const layer = layer_msg(layer_class, layer_sel); 
+
+        const setDevice_sel = objc.getSelector("setDevice:");
+        const SetObjFn = *const fn (?*anyopaque, ?objc.Selector, *anyopaque) callconv(.c) void;
+        const set_dev: SetObjFn = @ptrCast(&objc.objc_msgSend);
+        set_dev(layer, setDevice_sel, device_handle);
+
+        const setLayer_sel = objc.getSelector("setLayer:");
+        const SetLayerFn = *const fn (?*anyopaque, ?objc.Selector, ?*anyopaque) callconv(.c) void;
+        const set_layer: SetLayerFn = @ptrCast(&objc.objc_msgSend);
+        set_layer(view, setLayer_sel, layer);
+
+        // FIX: Return the View, not the Layer
+        return MetalView{ .handle = view }; 
     }
 
-    pub fn pollEvents(self: App) void {
-        const next_sel = objc.getSelector("nextEventMatchingMask:untilDate:inMode:dequeue:");
-        const send_sel = objc.getSelector("sendEvent:");
-        const update_sel = objc.getSelector("updateWindows");
+    pub fn nextDrawable(self: MetalView) ?*anyopaque {
+        if (self.handle) |view_handle| {
+            // 1. Get the Layer from the View
+            const layer_sel = objc.getSelector("layer");
+            const GetLayerFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) ?*anyopaque;
+            const get_layer: GetLayerFn = @ptrCast(&objc.objc_msgSend);
+            const layer = get_layer(view_handle, layer_sel);
 
-        const any_event: u64 = 0xFFFFFFFFFFFFFFFF;
-        const mode = objc.createNSString("kCFRunLoopDefaultMode");
-
-        const NextFn = *const fn (?objc.Object, ?objc.Selector, u64, ?objc.Object, ?objc.Object, bool) callconv(.c) ?objc.Object;
-        const next_msg: NextFn = @ptrCast(&objc.objc_msgSend);
-
-        const SendFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) void;
-        const send_msg: SendFn = @ptrCast(&objc.objc_msgSend);
-
-        const UpdateFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;
-        const update_msg: UpdateFn = @ptrCast(&objc.objc_msgSend);
-
-        // Process all pending events
-        while (true) {
-            const event = next_msg(self.handle, next_sel, any_event, null, mode, true);
-            if (event) |e| {
-                send_msg(self.handle, send_sel, e);
-            } else {
-                break;
+            if (layer) |l| {
+                // 2. Call nextDrawable on the Layer
+                const next_sel = objc.getSelector("nextDrawable");
+                const NextFn = *const fn (?*anyopaque, ?objc.Selector) callconv(.c) ?*anyopaque;
+                const msg: NextFn = @ptrCast(&objc.objc_msgSend);
+                return msg(l, next_sel);
             }
         }
-
-        update_msg(self.handle, update_sel);
-    }
-
-    pub fn run(self: App) void {
-        const run_sel = objc.getSelector("run");
-        const RunFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) void;
-        const run_msg: RunFn = @ptrCast(&objc.objc_msgSend);
-        run_msg(self.handle, run_sel);
+        return null;
     }
 };
+
+test "App Initialization" {
+    const app = App.init();
+    try std.testing.expect(app.handle != null);
+}
