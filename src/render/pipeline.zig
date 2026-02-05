@@ -1,5 +1,6 @@
 const std = @import("std");
 const objc = @import("../objc.zig");
+const types = @import("types.zig");
 
 pub const MetalRenderPipelineDescriptor = struct {
     handle: objc.Object,
@@ -48,6 +49,44 @@ pub const MetalRenderPipelineDescriptor = struct {
             set_fmt(att, setFmt_sel, format);
         }
     }
+
+    pub fn setDepthAttachmentPixelFormat(self: MetalRenderPipelineDescriptor, format: u64) void {
+        const sel = objc.getSelector("setDepthAttachmentPixelFormat:");
+        const SetFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, format);
+    }
+};
+
+pub const MetalDepthStencilDescriptor = struct {
+    handle: objc.Object,
+
+    pub fn create() ?MetalDepthStencilDescriptor {
+        const class = objc.objc_getClass("MTLDepthStencilDescriptor");
+        const sel = objc.getSelector("new");
+        const NewFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
+        const msg: NewFn = @ptrCast(&objc.objc_msgSend);
+        if (msg(class, sel)) |p| return MetalDepthStencilDescriptor{ .handle = p };
+        return null;
+    }
+
+    pub fn setDepthCompareFunction(self: MetalDepthStencilDescriptor, func: types.MTLCompareFunction) void {
+        const sel = objc.getSelector("setDepthCompareFunction:");
+        const SetFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, @intFromEnum(func));
+    }
+
+    pub fn setDepthWriteEnabled(self: MetalDepthStencilDescriptor, enabled: bool) void {
+        const sel = objc.getSelector("setDepthWriteEnabled:");
+        const SetFn = *const fn (?objc.Object, ?objc.Selector, bool) callconv(.c) void;
+        const msg: SetFn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, enabled);
+    }
+};
+
+pub const MetalDepthStencilState = struct {
+    handle: objc.Object,
 };
 
 pub const MetalRenderPipelineState = struct {

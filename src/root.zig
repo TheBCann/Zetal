@@ -213,6 +213,45 @@ pub const MetalDevice = struct {
         std.debug.print("ERROR: Failed to create Render Pipeline State!\n", .{});
         return null;
     }
+
+    pub fn createDepthStencilState(self: MetalDevice, desc: render.pipeline.MetalDepthStencilDescriptor) ?render.pipeline.MetalDepthStencilState {
+        const sel = objc.getSelector("newDepthStencilStateWithDescriptor:");
+        const NewFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) ?objc.Object;
+        const msg: NewFn = @ptrCast(&objc.objc_msgSend);
+        if (msg(self.handle, sel, desc.handle)) |p| return render.pipeline.MetalDepthStencilState{ .handle = p };
+        return null;
+    }
+
+    // Quick helper to create a Depth Texture
+    pub fn createDepthTexture(self: MetalDevice, width: u64, height: u64) ?objc.Object {
+        // 1. Create Descriptor
+        const desc_class = objc.objc_getClass("MTLTextureDescriptor");
+        const desc_sel = objc.getSelector("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+        const DescFn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64, bool) callconv(.c) ?objc.Object;
+        const desc_msg: DescFn = @ptrCast(&objc.objc_msgSend);
+
+        // 252 = Depth32Float
+        const tex_desc = desc_msg(desc_class, desc_sel, 252, width, height, false);
+
+        // 2. Set Usage (RenderTarget)
+        const usage_sel = objc.getSelector("setUsage:");
+        const UsageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const usage_msg: UsageFn = @ptrCast(&objc.objc_msgSend);
+        usage_msg(tex_desc, usage_sel, 4); // 4 = ShaderRead | RenderTarget
+
+        // 3. Set StorageMode (Private - GPU Only)
+        const storage_sel = objc.getSelector("setStorageMode:");
+        const StorageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const storage_msg: StorageFn = @ptrCast(&objc.objc_msgSend);
+        storage_msg(tex_desc, storage_sel, 2); // 2 = Private
+
+        // 4. Create Texture
+        const newTex_sel = objc.getSelector("newTextureWithDescriptor:");
+        const NewTexFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) ?objc.Object;
+        const new_tex_msg: NewTexFn = @ptrCast(&objc.objc_msgSend);
+
+        return new_tex_msg(self.handle, newTex_sel, tex_desc);
+    }
 };
 
 // --- Tests ---

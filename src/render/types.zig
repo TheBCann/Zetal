@@ -1,5 +1,19 @@
 const std = @import("std");
 
+// 252 = MTLPixelFormatDepth32Float
+pub const MTLPixelFormatDepth32Float: u64 = 252;
+
+pub const MTLCompareFunction = enum(u64) {
+    Never = 0,
+    Less = 1, // Draw if new Z < old Z (Standard 3D)
+    Equal = 2,
+    LessEqual = 3,
+    Greater = 4,
+    NotEqual = 5,
+    GreaterEqual = 6,
+    Always = 7,
+};
+
 pub const MTLLoadAction = enum(u64) {
     DontCare = 0,
     Load = 1,

@@ -40,9 +40,17 @@ pub fn main(init: std.process.Init) !void {
     pipe_desc.setVertexFunction(vert_fn.handle);
     pipe_desc.setFragmentFunction(frag_fn.handle);
     pipe_desc.setColorAttachmentPixelFormat(0, 80);
+    pipe_desc.setDepthAttachmentPixelFormat(252); // Depth32Float
 
     const pipeline_state = device.createRenderPipelineState(pipe_desc).?;
     std.debug.print("Shader Pipeline Compiled Successfully.\n", .{});
+
+    const depth_desc = Zetal.render.pipeline.MetalDepthStencilDescriptor.create().?;
+    depth_desc.setDepthCompareFunction(.Less); // Draw if closer
+    depth_desc.setDepthWriteEnabled(true);
+    const depth_state = device.createDepthStencilState(depth_desc).?;
+
+    const depth_texture = device.createDepthTexture(800, 600).?;
 
     // 3. Upload Vertices (CPU -> GPU)
     const vertices = Zetal.render.vertex.triangle_vertices;
@@ -103,11 +111,14 @@ pub fn main(init: std.process.Init) !void {
             const bg_color = Zetal.render.MTLClearColor{ .red = 0.1, .green = 0.1, .blue = 0.1, .alpha = 1.0 };
             pass.setColorAttachment(0, texture.?, .Clear, .Store, bg_color);
 
+            pass.setDepthAttachment(depth_texture, 1.0); // Clear to 1.0 (Furthest)
+
             const cmd_buffer = queue.createCommandBuffer().?;
             const encoder = cmd_buffer.createRenderCommandEncoder(pass).?;
 
             // --- DRAW COMMANDS ---
             encoder.setRenderPipelineState(pipeline_state.handle);
+            encoder.setDepthStencilState(depth_state.handle);
             // Bind Vertex Buffer (Slot 0)
             encoder.setVertexBuffer(vertex_buffer.handle, 0, 0); // Index 0 matches [[attribute(0)]] in shader
             // Bind Vertex Buffer (Slot 1)
