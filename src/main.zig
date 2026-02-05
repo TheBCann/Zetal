@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zetal = @import("Zetal");
+const Math = @import("render/math.zig");
 const objc = Zetal.objc;
 
 // --- Helper: Direct Kernel Sleep ---
@@ -46,15 +47,18 @@ pub fn main(init: std.process.Init) !void {
 
     // 3. Upload Vertices (CPU -> GPU)
     const vertices = Zetal.render.vertex.triangle_vertices;
-    const data_size = @sizeOf(@TypeOf(vertices));
-    const vertex_buffer = device.createBuffer(data_size, .StorageModeShared).?;
-
-    // Copy data
+    const vertex_buffer = device.createBuffer(@sizeOf(@TypeOf(vertices)), .StorageModeShared).?;
     const dest_ptr = @as([*]Zetal.render.vertex.Vertex, @ptrCast(@alignCast(vertex_buffer.contents())));
     @memcpy(dest_ptr[0..vertices.len], &vertices);
-    std.debug.print("Vertex Data Uploaded ({d} bytes).\n", .{data_size});
+    std.debug.print("Vertex Data Uploaded.\n", .{});
+
+    // 4. Create Uniform Buffer
+    // Create a buffer large enough to hold one 4x4 matrix
+    const uniform_buffer = device.createBuffer(@sizeOf(Math.Mat4x4), .StorageModeShared).?;
 
     std.debug.print("Engine Initialized. Starting Render Loop...\n", .{});
+
+    var angle: f32 = 0.0;
 
     while (true) {
         // Poll Events
@@ -70,6 +74,13 @@ pub fn main(init: std.process.Init) !void {
         const InitFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
         const init_msg: InitFn = @ptrCast(&objc.objc_msgSend);
         pool = init_msg(pool, init_sel);
+
+        angle += 0.02; // Spin speed
+        const model_matrix = Math.Mat4x4.rotateZ(angle);
+
+        // Upload Matrix to GPU
+        const uniform_ptr = @as([*]Math.Mat4x4, @ptrCast(@alignCast(uniform_buffer.contents())));
+        uniform_ptr[0] = model_matrix;
 
         // Render Frame
         const drawable = view.nextDrawable();
@@ -90,11 +101,16 @@ pub fn main(init: std.process.Init) !void {
 
             // --- DRAW COMMANDS ---
             encoder.setRenderPipelineState(pipeline_state.handle);
-            encoder.setVertexBuffer(vertex_buffer.handle, 0, 0); // Index 0 matches [[attribute(0)]] in shader
-            encoder.drawPrimitives(.Triangle, 0, 3);
-            // ---------------------
 
+            // Bind Vertex Buffer (Slot 0)
+            encoder.setVertexBuffer(vertex_buffer.handle, 0, 0); // Index 0 matches [[attribute(0)]] in shader
+
+            // Bind Vertex Buffer (Slot 1)
+            encoder.setVertexBuffer(uniform_buffer.handle, 0, 1);
+
+            encoder.drawPrimitives(.Triangle, 0, 3);
             encoder.endEncoding();
+
             cmd_buffer.presentDrawable(d);
             cmd_buffer.commit();
         }
