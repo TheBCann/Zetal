@@ -92,6 +92,15 @@ pub const MetalRenderCommandEncoder = struct {
         const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel, buffer, offset, index);
     }
+
+    // NEW: Set Vertex Bytes (for dynamic uniforms)
+    pub fn setVertexBytes(self: MetalRenderCommandEncoder, bytes: *const anyopaque, length: u64, index: u64) void {
+        const sel = objc.getSelector("setVertexBytes:length:atIndex:");
+        const Fn = *const fn (?objc.Object, ?objc.Selector, *const anyopaque, u64, u64) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, bytes, length, index);
+    }
+
     pub fn drawPrimitives(self: MetalRenderCommandEncoder, primType: types.MTLPrimitiveType, start: u64, count: u64) void {
         const sel = objc.getSelector("drawPrimitives:vertexStart:vertexCount:");
         const Fn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64) callconv(.c) void;
@@ -104,7 +113,6 @@ pub const MetalRenderCommandEncoder = struct {
         const msg: Fn = @ptrCast(&objc.objc_msgSend);
         msg(self.handle, sel);
     }
-
     pub fn drawIndexedPrimitives(self: MetalRenderCommandEncoder, primType: types.MTLPrimitiveType, indexCount: u64, indexType: types.MTLIndexType, indexBuffer: objc.Object, indexBufferOffset: u64) void {
         const sel = objc.getSelector("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:");
         const Fn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64, ?objc.Object, u64) callconv(.c) void;
