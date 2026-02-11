@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
     // Link System Frameworks to the Library
     zetal_lib.linkFramework("Foundation", .{});
     zetal_lib.linkFramework("Metal", .{});
+    zetal_lib.linkFramework("MetalKit", .{}); // <--- ADDED THIS LINE
     zetal_lib.linkFramework("AppKit", .{});
     zetal_lib.linkSystemLibrary("objc", .{});
     zetal_lib.linkFramework("QuartzCore", .{});

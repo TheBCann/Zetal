@@ -35,3 +35,10 @@ pub fn createNSString(content: [:0]const u8) ?Object {
 
     return raw_string;
 }
+
+pub const CGRect = extern struct {
+    origin_x: f64,
+    origin_y: f64,
+    width: f64,
+    height: f64,
+};

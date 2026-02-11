@@ -12,19 +12,31 @@ pub const Core = struct {
     view: window.MetalView,
     depth_texture: objc.Object,
 
+    const CGSize = extern struct { width: f64, height: f64 };
+
     pub fn init() !Core {
         // 1. System Setup
         const device = root.MetalDevice.createSystemDefault() orelse return error.NoDevice;
         const queue = device.createCommandQueue() orelse return error.NoQueue;
-        const app = window.App.init(); // Note: App is now part of Core
+        const app = window.App.init();
 
         // 2. Window Setup
         const win = window.Window.create(800, 600, "Zetal Engine") orelse return error.WindowFailed;
         const view = window.MetalView.create(.{ .origin_x = 0, .origin_y = 0, .width = 800, .height = 600 }, device.handle) orelse return error.ViewFailed;
         win.setContentView(view);
 
-        // 3. Shared Resources (Depth Buffer)
-        const depth_texture = device.createDepthTexture(800, 600) orelse return error.DepthTextureFailed;
+        // 3. Query ACTUAL pixel size from MTKView (Retina-aware)
+        //    On a 2x Retina display, an 800x600 point window = 1600x1200 pixels.
+        //    The depth texture MUST match the drawable's pixel dimensions.
+        const size_sel = objc.getSelector("drawableSize");
+        const SizeFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) CGSize;
+        const size_msg: SizeFn = @ptrCast(&objc.objc_msgSend);
+        const drawable_size = size_msg(view.handle, size_sel);
+        const pixel_w: u64 = @intFromFloat(drawable_size.width);
+        const pixel_h: u64 = @intFromFloat(drawable_size.height);
+
+        // 4. Shared Resources (Depth Buffer at pixel resolution)
+        const depth_texture = device.createDepthTexture(pixel_w, pixel_h) orelse return error.DepthTextureFailed;
 
         return Core{
             .device = device,
