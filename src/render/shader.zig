@@ -9,33 +9,28 @@ pub const triangle_source =
     \\     float4 normal;
     \\ };
     \\
-    \\ struct Uniforms {
-    \\     float4x4 modelMatrix;
-    \\ };
-    \\
     \\ struct VertexOut {
     \\     float4 position [[position]];
     \\     float4 color;
     \\     float2 uv;
     \\     float3 normal;
-    \\     float3 worldPos;
     \\ };
     \\
     \\ vertex VertexOut vertex_main(
     \\     uint vertexID [[vertex_id]],
+    \\     uint instanceID [[instance_id]],
     \\     constant Vertex *vertices [[buffer(0)]],
-    \\     constant Uniforms &uniforms [[buffer(1)]]
+    \\     constant float4x4 *mvps [[buffer(1)]]
     \\ ) {
     \\     VertexOut out;
+    \\     float4x4 mvp = mvps[instanceID];
     \\     float4 rawPos = vertices[vertexID].position;
     \\     float4 rawNorm = vertices[vertexID].normal;
     \\
-    \\     // Transform position
-    \\     out.position = uniforms.modelMatrix * rawPos;
-    \\     
-    \\     // Rotate the normal (using the upper 3x3 of model matrix)
-    \\     // Note: technically should use inverse-transpose, but for pure rotation it's fine
-    \\     float3x3 normalMatrix = float3x3(uniforms.modelMatrix[0].xyz, uniforms.modelMatrix[1].xyz, uniforms.modelMatrix[2].xyz);
+    \\     out.position = mvp * rawPos;
+    \\
+    \\     // Rotate normal (upper 3x3 of the MVP - approximate)
+    \\     float3x3 normalMatrix = float3x3(mvp[0].xyz, mvp[1].xyz, mvp[2].xyz);
     \\     out.normal = normalMatrix * rawNorm.xyz;
     \\
     \\     out.color = vertices[vertexID].color;
@@ -51,18 +46,13 @@ pub const triangle_source =
     \\     float4 texColor = tex.sample(sam, in.uv);
     \\
     \\     // --- LIGHTING ---
-    \\     float3 lightDir = normalize(float3(1.0, 1.0, 1.0)); // Light from top-right-front
+    \\     float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
     \\     float3 norm = normalize(in.normal);
-    \\     
-    \\     // Diffuse: max(dot(N, L), 0.0)
+    \\
     \\     float diff = max(dot(norm, lightDir), 0.0);
-    \\     
-    \\     // Ambient: minimum light so shadows aren't pitch black
     \\     float ambient = 0.3;
-    \\     
-    \\     // Combine
     \\     float3 finalLight = (diff + ambient) * in.color.rgb;
-    \\     
+    \\
     \\     return float4(finalLight * texColor.rgb, 1.0);
     \\ }
 ;

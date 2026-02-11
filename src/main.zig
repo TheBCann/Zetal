@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (FPS Camera)...\n", .{});
+    try stdout.print("Starting Zetal Engine (Instanced Rendering)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
@@ -38,6 +38,7 @@ pub fn main(init: std.process.Init) !void {
         const radius = 2.0 + (fi * 0.1);
         try scene.add(@cos(angle) * radius, (fi * 0.2) - 10.0, @sin(angle) * radius - 10.0);
     }
+    const instance_count = scene.objects.items.len;
 
     // Upload Texture
     const texture = core.device.createTexture(ppm.width, ppm.height, 70).?;
@@ -58,17 +59,24 @@ pub fn main(init: std.process.Init) !void {
     depth_desc.setDepthWriteEnabled(true);
     const depth_state = core.device.createDepthStencilState(depth_desc).?;
 
-    // Buffers
+    // Vertex & Index Buffers
     const vertex_buffer = core.device.createBuffer(@sizeOf(Zetal.render.vertex.Vertex) * model.vertices.len, .StorageModeShared).?;
     @memcpy(@as([*]Zetal.render.vertex.Vertex, @ptrCast(@alignCast(vertex_buffer.contents())))[0..model.vertices.len], model.vertices);
     const index_buffer = core.device.createBuffer(@sizeOf(u32) * model.indices.len, .StorageModeShared).?;
     @memcpy(@as([*]u32, @ptrCast(@alignCast(index_buffer.contents())))[0..model.indices.len], model.indices);
 
+    // --- INSTANCE BUFFER ---
+    // One Mat4x4 per object, updated every frame on CPU, read by GPU via buffer(1)
+    const instance_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * instance_count, .StorageModeShared).?;
+
+    try stdout.print("Engine Ready. Rendering {d} instances in 1 draw call.\n", .{instance_count});
+    try stdout.flush();
+
     // --- CAMERA STATE ---
-    var cam_pos = Vec3.init(0, 0, 5); // Start back a bit
-    var cam_yaw: f32 = -90.0; // Facing -Z
+    var cam_pos = Vec3.init(0, 0, 5);
+    var cam_yaw: f32 = -90.0;
     var cam_pitch: f32 = 0.0;
-    const move_speed: f32 = 5.0; // Units per second
+    const move_speed: f32 = 5.0;
     const mouse_sensitivity: f32 = 0.1;
 
     const start_time = try Io.Clock.Timestamp.now(io, .awake);
@@ -87,66 +95,75 @@ pub fn main(init: std.process.Init) !void {
         // 1. Mouse Look
         cam_yaw += core.app.mouse_dx * mouse_sensitivity;
         cam_pitch += core.app.mouse_dy * mouse_sensitivity;
-        // cam_pitch -= core.app.mouse_dy * mouse_sensitivity;  // FPS NAVIGATION
+        // cam_pitch -= core.app.mouse_dy * mouse_sensitivity; // Uncomment for non-inverted
 
-        // Clamp Pitch (Prevent backflip)
         if (cam_pitch > 89.0) cam_pitch = 89.0;
         if (cam_pitch < -89.0) cam_pitch = -89.0;
 
-        // 2. Calculate Forward/Right Vectors
-        // Convert Spherical to Cartesian
+        // 2. Camera Vectors
         const yaw_rad = std.math.degreesToRadians(cam_yaw);
         const pitch_rad = std.math.degreesToRadians(cam_pitch);
 
-        const front = Vec3.norm(Vec3.init(@cos(yaw_rad) * @cos(pitch_rad), @sin(pitch_rad), // Note: Metal/Y-up might need inversion here depending on coord system. Let's test.
-            @sin(yaw_rad) * @cos(pitch_rad)));
+        const front = Vec3.norm(Vec3.init(
+            @cos(yaw_rad) * @cos(pitch_rad),
+            @sin(pitch_rad),
+            @sin(yaw_rad) * @cos(pitch_rad),
+        ));
 
-        // Standard Up
         const world_up = Vec3.init(0, 1, 0);
         const right = Vec3.norm(Vec3.cross(front, world_up));
-        // Recalculate camera up (for roll/tilt)
         const cam_up = Vec3.norm(Vec3.cross(right, front));
 
-        // 3. Movement (WASD) - Now relative to looking direction
+        // 3. Movement
         const velocity = move_speed * dt_sec;
         if (core.app.isPressed(.W)) cam_pos = Vec3.add(cam_pos, Vec3.scale(front, velocity));
         if (core.app.isPressed(.S)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(front, velocity));
-        if (core.app.isPressed(.A)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(right, velocity)); // Strafe Left
-        if (core.app.isPressed(.D)) cam_pos = Vec3.add(cam_pos, Vec3.scale(right, velocity)); // Strafe Right
-        if (core.app.isPressed(.Q)) cam_pos = Vec3.add(cam_pos, Vec3.scale(world_up, velocity)); // Fly Up
-        if (core.app.isPressed(.E)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(world_up, velocity)); // Fly Down
+        if (core.app.isPressed(.A)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(right, velocity));
+        if (core.app.isPressed(.D)) cam_pos = Vec3.add(cam_pos, Vec3.scale(right, velocity));
+        if (core.app.isPressed(.Q)) cam_pos = Vec3.add(cam_pos, Vec3.scale(world_up, velocity));
+        if (core.app.isPressed(.E)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(world_up, velocity));
 
-        // Construct View Matrix using LookAt
+        // 4. View-Projection Matrix
         const center = Vec3.add(cam_pos, front);
         const view_mat = Math.Mat4x4.lookAt(cam_pos, center, cam_up);
         const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), 800.0 / 600.0, 0.1, 100.0);
         const view_proj = Math.Mat4x4.mul(proj_mat, view_mat);
 
-        // Render
+        // 5. Compute all MVPs and write into instance buffer
+        const total_elapsed = start_time.durationTo(now).raw.toMilliseconds();
+        const time_sec = @as(f32, @floatFromInt(total_elapsed)) / 1000.0;
+
+        const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(instance_buffer.contents())));
+        for (scene.objects.items, 0..) |obj, idx| {
+            const spin = obj.rot_y + (@as(f32, @floatFromInt(idx)) * 0.05);
+            const rot_mat = Math.Mat4x4.rotateY(spin + time_sec);
+
+            var model_mat = rot_mat;
+            model_mat.columns[3][0] = obj.x;
+            model_mat.columns[3][1] = obj.y;
+            model_mat.columns[3][2] = obj.z;
+
+            gpu_mvps[idx] = Math.Mat4x4.mul(view_proj, model_mat);
+        }
+
+        // 6. Render — ONE draw call for all instances
         const bg_color = Zetal.render.MTLClearColor{ .red = 0.1, .green = 0.1, .blue = 0.1, .alpha = 1.0 };
         if (core.beginFrame(bg_color)) |frame| {
             frame.enc.setRenderPipelineState(pipeline_state.handle);
             frame.enc.setDepthStencilState(depth_state.handle);
             frame.enc.setVertexBuffer(vertex_buffer.handle, 0, 0);
+            frame.enc.setVertexBuffer(instance_buffer.handle, 0, 1); // MVP buffer at index 1
             frame.enc.setFragmentTexture(texture.handle, 0);
 
-            // Time for rotation
-            const total_elapsed = start_time.durationTo(now).raw.toMilliseconds();
-            const time_sec = @as(f32, @floatFromInt(total_elapsed)) / 1000.0;
+            frame.enc.drawIndexedPrimitivesInstanced(
+                .Triangle,
+                model.indices.len,
+                .UInt32,
+                index_buffer.handle,
+                0,
+                instance_count,
+            );
 
-            for (scene.objects.items, 0..) |obj, idx| {
-                const spin = obj.rot_y + (@as(f32, @floatFromInt(idx)) * 0.05);
-                const rot_mat = Math.Mat4x4.rotateY(spin + time_sec);
-
-                var final_model = rot_mat;
-                final_model.columns[3][0] = obj.x;
-                final_model.columns[3][1] = obj.y;
-                final_model.columns[3][2] = obj.z;
-
-                const mvp = Math.Mat4x4.mul(view_proj, final_model);
-                frame.enc.setVertexBytes(&mvp, @sizeOf(Math.Mat4x4), 1);
-                frame.enc.drawIndexedPrimitives(.Triangle, model.indices.len, .UInt32, index_buffer.handle, 0);
-            }
             frame.submit();
         }
 
@@ -164,7 +181,6 @@ pub fn main(init: std.process.Init) !void {
         const drain_msg: DrainFn = @ptrCast(&Zetal.objc.objc_msgSend);
         drain_msg(pool, drain_sel);
 
-        // Slightly shorter sleep for higher FPS feel
         simpleSleep(8 * 1000 * 1000);
     }
 }
