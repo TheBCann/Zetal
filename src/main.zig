@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (Instanced Rendering)...\n", .{});
+    try stdout.print("Starting Zetal Engine (ECS + Collision)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
@@ -29,16 +29,13 @@ pub fn main(init: std.process.Init) !void {
     const ppm = try Zetal.texture.loadPPM(allocator, "test.ppm", io);
     defer ppm.deinit();
 
-    // Scene
-    var scene = try Zetal.scene.Scene.init(allocator);
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
-        const fi = @as(f32, @floatFromInt(i));
-        const angle = fi * 0.5;
-        const radius = 2.0 + (fi * 0.1);
-        try scene.add(@cos(angle) * radius, (fi * 0.2) - 10.0, @sin(angle) * radius - 10.0);
-    }
-    const instance_count = scene.objects.items.len;
+    // --- ECS WORLD ---
+    var world = Zetal.ecs.World.init();
+    try Zetal.scene.spawnCubeField(&world, 100);
+    const instance_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
+
+    try stdout.print("ECS: {d} entities, {d} renderable, all with colliders.\n", .{ world.count, instance_count });
+    try stdout.flush();
 
     // Upload Texture
     const texture = core.device.createTexture(ppm.width, ppm.height, 70).?;
@@ -65,11 +62,10 @@ pub fn main(init: std.process.Init) !void {
     const index_buffer = core.device.createBuffer(@sizeOf(u32) * model.indices.len, .StorageModeShared).?;
     @memcpy(@as([*]u32, @ptrCast(@alignCast(index_buffer.contents())))[0..model.indices.len], model.indices);
 
-    // --- INSTANCE BUFFER ---
-    // One Mat4x4 per object, updated every frame on CPU, read by GPU via buffer(1)
+    // Instance Buffer
     const instance_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * instance_count, .StorageModeShared).?;
 
-    try stdout.print("Engine Ready. Rendering {d} instances in 1 draw call.\n", .{instance_count});
+    try stdout.print("Engine Ready. {d} renderable entities with collision.\n", .{instance_count});
     try stdout.flush();
 
     // --- CAMERA STATE ---
@@ -78,6 +74,7 @@ pub fn main(init: std.process.Init) !void {
     var cam_pitch: f32 = 0.0;
     const move_speed: f32 = 5.0;
     const mouse_sensitivity: f32 = 0.1;
+    const cam_radius: f32 = 0.3; // Camera collision radius
 
     const start_time = try Io.Clock.Timestamp.now(io, .awake);
     var last_time = start_time;
@@ -123,36 +120,35 @@ pub fn main(init: std.process.Init) !void {
         if (core.app.isPressed(.Q)) cam_pos = Vec3.add(cam_pos, Vec3.scale(world_up, velocity));
         if (core.app.isPressed(.E)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(world_up, velocity));
 
-        // 4. View-Projection Matrix
+        // 4. Camera Collision — push camera out of any cubes
+        const resolved = Zetal.systems.resolveCamera(&world, cam_pos.x, cam_pos.y, cam_pos.z, cam_radius);
+        cam_pos = Vec3.init(resolved.x, resolved.y, resolved.z);
+
+        // 5. View-Projection Matrix
         const center = Vec3.add(cam_pos, front);
         const view_mat = Math.Mat4x4.lookAt(cam_pos, center, cam_up);
         const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), 800.0 / 600.0, 0.1, 100.0);
         const view_proj = Math.Mat4x4.mul(proj_mat, view_mat);
 
-        // 5. Compute all MVPs and write into instance buffer
+        // 6. ECS Systems
         const total_elapsed = start_time.durationTo(now).raw.toMilliseconds();
         const time_sec = @as(f32, @floatFromInt(total_elapsed)) / 1000.0;
 
+        Zetal.systems.spinSystem(&world, time_sec);
+        Zetal.systems.velocitySystem(&world, dt_sec);
+        Zetal.systems.collisionSystem(&world);
+
+        // Build instance buffer from ECS
         const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(instance_buffer.contents())));
-        for (scene.objects.items, 0..) |obj, idx| {
-            const spin = obj.rot_y + (@as(f32, @floatFromInt(idx)) * 0.05);
-            const rot_mat = Math.Mat4x4.rotateY(spin + time_sec);
+        const drawn = Zetal.systems.buildInstanceBuffer(&world, view_proj, gpu_mvps);
 
-            var model_mat = rot_mat;
-            model_mat.columns[3][0] = obj.x;
-            model_mat.columns[3][1] = obj.y;
-            model_mat.columns[3][2] = obj.z;
-
-            gpu_mvps[idx] = Math.Mat4x4.mul(view_proj, model_mat);
-        }
-
-        // 6. Render — ONE draw call for all instances
+        // 7. Render — ONE draw call for all instances
         const bg_color = Zetal.render.MTLClearColor{ .red = 0.1, .green = 0.1, .blue = 0.1, .alpha = 1.0 };
         if (core.beginFrame(bg_color)) |frame| {
             frame.enc.setRenderPipelineState(pipeline_state.handle);
             frame.enc.setDepthStencilState(depth_state.handle);
             frame.enc.setVertexBuffer(vertex_buffer.handle, 0, 0);
-            frame.enc.setVertexBuffer(instance_buffer.handle, 0, 1); // MVP buffer at index 1
+            frame.enc.setVertexBuffer(instance_buffer.handle, 0, 1);
             frame.enc.setFragmentTexture(texture.handle, 0);
 
             frame.enc.drawIndexedPrimitivesInstanced(
@@ -161,7 +157,7 @@ pub fn main(init: std.process.Init) !void {
                 .UInt32,
                 index_buffer.handle,
                 0,
-                instance_count,
+                drawn,
             );
 
             frame.submit();

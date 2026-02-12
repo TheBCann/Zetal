@@ -1,9 +1,15 @@
 const std = @import("std");
 pub const objc = @import("objc.zig");
 pub const window = @import("window.zig");
-pub const scene = @import("scene.zig");
 pub const texture = @import("texture.zig");
 pub const render = @import("render/root.zig");
+pub const engine = @import("engine.zig");
+pub const loader = @import("loader.zig");
+
+// --- ECS ---
+pub const ecs = @import("ecs.zig");
+pub const systems = @import("systems.zig");
+pub const scene = @import("scene.zig");
 
 extern "Metal" fn MTLCreateSystemDefaultDevice() ?*anyopaque;
 
@@ -173,7 +179,6 @@ pub const MetalDevice = struct {
         return null;
     }
 
-    // Generic Texture Creator
     pub fn createTexture(self: MetalDevice, width: u64, height: u64, format: u64) ?MetalTexture {
         const desc_class = objc.objc_getClass("MTLTextureDescriptor");
         const desc_sel = objc.getSelector("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
@@ -182,7 +187,6 @@ pub const MetalDevice = struct {
 
         const tex_desc = desc_msg(desc_class, desc_sel, format, width, height, false);
 
-        // Usage = ShaderRead (1) | RenderTarget (4) = 5
         const usage_sel = objc.getSelector("setUsage:");
         const UsageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
         const usage_msg: UsageFn = @ptrCast(&objc.objc_msgSend);
@@ -196,25 +200,23 @@ pub const MetalDevice = struct {
         return null;
     }
 
-    // RESTORED: Helper specifically for Depth Textures
     pub fn createDepthTexture(self: MetalDevice, width: u64, height: u64) ?objc.Object {
         const desc_class = objc.objc_getClass("MTLTextureDescriptor");
         const desc_sel = objc.getSelector("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
         const DescFn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64, bool) callconv(.c) ?objc.Object;
         const desc_msg: DescFn = @ptrCast(&objc.objc_msgSend);
 
-        // 252 = Depth32Float
         const tex_desc = desc_msg(desc_class, desc_sel, 252, width, height, false);
 
         const usage_sel = objc.getSelector("setUsage:");
         const UsageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
         const usage_msg: UsageFn = @ptrCast(&objc.objc_msgSend);
-        usage_msg(tex_desc, usage_sel, 4); // RenderTarget
+        usage_msg(tex_desc, usage_sel, 4);
 
         const storage_sel = objc.getSelector("setStorageMode:");
         const StorageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
         const storage_msg: StorageFn = @ptrCast(&objc.objc_msgSend);
-        storage_msg(tex_desc, storage_sel, 2); // Private
+        storage_msg(tex_desc, storage_sel, 2);
 
         const newTex_sel = objc.getSelector("newTextureWithDescriptor:");
         const NewTexFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) ?objc.Object;
@@ -228,5 +230,3 @@ test {
     std.testing.refAllDecls(@import("render/math.zig"));
     std.testing.refAllDecls(@import("window.zig"));
 }
-pub const engine = @import("engine.zig");
-pub const loader = @import("loader.zig");

@@ -1,0 +1,39 @@
+const ecs = @import("ecs.zig");
+
+/// Spawn a spinning renderable cube at the given position.
+pub fn spawnCube(world: *ecs.World, x: f32, y: f32, z: f32, spin_offset: f32) !ecs.Entity {
+    const e = try world.spawn();
+
+    world.setTransform(e, .{
+        .x = x,
+        .y = y,
+        .z = z,
+    });
+
+    world.setSpin(e, .{
+        .speed = 1.0,
+        .offset = spin_offset,
+    });
+
+    world.setMeshRenderer(e, .{
+        .mesh_id = 0,
+        .texture_id = 0,
+    });
+
+    return e;
+}
+
+/// Populate a field of spinning cubes (matches the original 100-cube spiral).
+pub fn spawnCubeField(world: *ecs.World, count: usize) !void {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const fi = @as(f32, @floatFromInt(i));
+        const angle = fi * 0.5;
+        const radius = 2.0 + (fi * 0.1);
+        const x = @cos(angle) * radius;
+        const y = (fi * 0.2) - 10.0;
+        const z = @sin(angle) * radius - 10.0;
+        const spin_offset = fi * 0.05;
+        _ = try spawnCube(world, x, y, z, spin_offset);
+    }
+}
