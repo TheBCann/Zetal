@@ -100,6 +100,13 @@ pub const MetalRenderCommandEncoder = struct {
         msg(self.handle, sel, bytes, length, index);
     }
 
+    pub fn setFragmentBytes(self: MetalRenderCommandEncoder, bytes: *const anyopaque, length: u64, index: u64) void {
+        const sel = objc.getSelector("setFragmentBytes:length:atIndex:");
+        const Fn = *const fn (?objc.Object, ?objc.Selector, *const anyopaque, u64, u64) callconv(.c) void;
+        const msg: Fn = @ptrCast(&objc.objc_msgSend);
+        msg(self.handle, sel, bytes, length, index);
+    }
+
     pub fn drawPrimitives(self: MetalRenderCommandEncoder, primType: types.MTLPrimitiveType, start: u64, count: u64) void {
         const sel = objc.getSelector("drawPrimitives:vertexStart:vertexCount:");
         const Fn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64) callconv(.c) void;

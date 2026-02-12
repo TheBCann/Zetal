@@ -38,15 +38,11 @@ pub fn velocitySystem(world: *ecs.World, dt: f32) void {
 
 // ============================================================
 // COLLISION SYSTEM
-// Detects AABB overlaps between all collidable entities.
-// Resolves by pushing non-static entities apart along the
-// axis of least penetration (minimum translation vector).
 // ============================================================
 
 const collider_mask = ecs.mask(&.{ .transform, .collider });
 
 pub fn collisionSystem(world: *ecs.World) void {
-    // O(n^2) broad phase — fine for < 500 entities
     var i: u32 = 0;
     while (i < world.count) : (i += 1) {
         if (!ecs.hasMask(world.masks[i], collider_mask)) continue;
@@ -59,15 +55,11 @@ pub fn collisionSystem(world: *ecs.World) void {
             const b_box = ecs.AABB.fromTransformCollider(&world.transforms[j], &world.colliders[j]);
 
             if (!a_box.overlaps(b_box)) continue;
-
-            // Both static — no resolution needed
             if (world.colliders[i].is_static and world.colliders[j].is_static) continue;
 
-            // Compute penetration on each axis
             const pen = a_box.penetration(b_box);
             if (pen.x <= 0 or pen.y <= 0 or pen.z <= 0) continue;
 
-            // Push apart along axis of LEAST penetration (MTV)
             const abs_x = pen.x;
             const abs_y = pen.y;
             const abs_z = pen.z;
@@ -77,21 +69,18 @@ pub fn collisionSystem(world: *ecs.World) void {
             var push_z: f32 = 0;
 
             if (abs_x <= abs_y and abs_x <= abs_z) {
-                // X is shallowest
                 if (world.transforms[i].x < world.transforms[j].x) {
                     push_x = -abs_x;
                 } else {
                     push_x = abs_x;
                 }
             } else if (abs_y <= abs_x and abs_y <= abs_z) {
-                // Y is shallowest
                 if (world.transforms[i].y < world.transforms[j].y) {
                     push_y = -abs_y;
                 } else {
                     push_y = abs_y;
                 }
             } else {
-                // Z is shallowest
                 if (world.transforms[i].z < world.transforms[j].z) {
                     push_z = -abs_z;
                 } else {
@@ -99,12 +88,10 @@ pub fn collisionSystem(world: *ecs.World) void {
                 }
             }
 
-            // Apply push — split between non-static entities
             const a_static = world.colliders[i].is_static;
             const b_static = world.colliders[j].is_static;
 
             if (!a_static and !b_static) {
-                // Both dynamic — split the push
                 world.transforms[i].x += push_x * 0.5;
                 world.transforms[i].y += push_y * 0.5;
                 world.transforms[i].z += push_z * 0.5;
@@ -112,12 +99,10 @@ pub fn collisionSystem(world: *ecs.World) void {
                 world.transforms[j].y -= push_y * 0.5;
                 world.transforms[j].z -= push_z * 0.5;
             } else if (!a_static) {
-                // Only A moves
                 world.transforms[i].x += push_x;
                 world.transforms[i].y += push_y;
                 world.transforms[i].z += push_z;
             } else {
-                // Only B moves
                 world.transforms[j].x -= push_x;
                 world.transforms[j].y -= push_y;
                 world.transforms[j].z -= push_z;
@@ -128,8 +113,6 @@ pub fn collisionSystem(world: *ecs.World) void {
 
 // ============================================================
 // CAMERA COLLISION
-// Checks camera position against all collidable entities.
-// Returns an adjusted camera position pushed out of any AABB.
 // ============================================================
 
 pub fn resolveCamera(
@@ -143,7 +126,6 @@ pub fn resolveCamera(
     var ry = cam_y;
     var rz = cam_z;
 
-    // Treat camera as a small AABB
     const cam_box = ecs.AABB{
         .min_x = rx - cam_radius,
         .min_y = ry - cam_radius,
@@ -163,7 +145,6 @@ pub fn resolveCamera(
         const pen = cam_box.penetration(ent_box);
         if (pen.x <= 0 or pen.y <= 0 or pen.z <= 0) continue;
 
-        // Push camera out along axis of least penetration
         if (pen.x <= pen.y and pen.x <= pen.z) {
             if (rx < world.transforms[i].x) {
                 rx -= pen.x;
@@ -190,6 +171,7 @@ pub fn resolveCamera(
 
 // ============================================================
 // RENDER SYSTEM
+// Now outputs BOTH MVP and Model matrices for proper lighting.
 // ============================================================
 
 const render_mask = ecs.mask(&.{ .transform, .mesh_renderer });
@@ -198,6 +180,7 @@ pub fn buildInstanceBuffer(
     world: *ecs.World,
     view_proj: math.Mat4x4,
     gpu_mvps: [*]math.Mat4x4,
+    gpu_models: [*]math.Mat4x4,
 ) u32 {
     var n: u32 = 0;
     for (0..world.count) |i| {
@@ -205,12 +188,14 @@ pub fn buildInstanceBuffer(
 
         const t = &world.transforms[i];
 
+        // Build model matrix: rotate then translate
         const rot = math.Mat4x4.rotateY(t.rot_y);
         var model_mat = rot;
         model_mat.columns[3][0] = t.x;
         model_mat.columns[3][1] = t.y;
         model_mat.columns[3][2] = t.z;
 
+        gpu_models[n] = model_mat;
         gpu_mvps[n] = math.Mat4x4.mul(view_proj, model_mat);
         n += 1;
     }
