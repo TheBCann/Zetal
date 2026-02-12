@@ -1,5 +1,5 @@
 0
-8223 20320768 1770931184202637639 23536dd66b2982cf8aa4d1d30566498c 0 src/main.zig
+8238 20322173 1770931803378884932 dfa7447bb0b9d511462da149b7d63f23 0 src/main.zig
 10423 20189442 1770806916780018694 9df2ede8a15949b2d8c829a5e9c8f608 0 src/root.zig
 21711 18098216 1769767744000000000 cbecfefc0e8b7a334434f82786fed82a 1 ubsan_rt.zig
 16190 19136463 1762653718000000000 6e1f4c892e1498e9f66da9330cfd8f1e 0 /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/usr/lib/libobjc.tbd
@@ -844,13 +844,13 @@
 419 18098035 1769767744000000000 ed7dfc04a5d0c4f0853edb5414ce981e 1 std/os/linux/bpf/btf_ext.zig
 24293 18098036 1769767744000000000 0c7d3ee9ea8e698a843ee6039fd161c4 1 std/os/linux/bpf/helpers.zig
 2972 18097781 1769767744000000000 8c37c40098d399e3b36a078ce1d4e3a1 1 std/crypto/codecs/asn1/der/ArrayListReverse.zig
-8223 20320768 1770931184202637639 23536dd66b2982cf8aa4d1d30566498c 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/main.zig
+8238 20322173 1770931803378884932 dfa7447bb0b9d511462da149b7d63f23 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/main.zig
 10423 20189442 1770806916780018694 9df2ede8a15949b2d8c829a5e9c8f608 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/root.zig
 1392 19872055 1770795144138053189 a3984871474fd1958ce584c77d95ef19 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/objc.zig
 9152 20166462 1770795051229492405 2d9da331fb55fe20ff3eebef5f94faa1 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/window.zig
 2428 19872069 1770494955291645504 d29b4fb24c7b443c7af1832c9423320e 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/texture.zig
 728 19872064 1770494955289973381 9824718d31e6233e134c9e0f48fde320 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/render/root.zig
-3531 20168333 1770796704833659105 ad21b6b70c5b4799d9d2e7633a324742 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/engine.zig
+4236 20322036 1770931744908632423 c9a0a7edb353fc3ab60d8be78fff8ce6 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/engine.zig
 5445 19872057 1770494955287654092 5a5a84cb2e0a83f24ea91528549df08d 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/loader.zig
 5883 20321132 1770931255409864127 22c0b0623066b7f391637e8c82f712ee 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/ecs.zig
 7210 20320604 1770931120764177408 28fc11e28e68a75e8a8463fc79e1dc50 0 /Users/bcann/Desktop/.programming/ziggy/ziggy16/nightly-projects/Zetal/src/systems.zig

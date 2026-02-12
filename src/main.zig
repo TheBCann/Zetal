@@ -74,7 +74,7 @@ pub fn main(init: std.process.Init) !void {
     var cam_pitch: f32 = 0.0;
     const move_speed: f32 = 5.0;
     const mouse_sensitivity: f32 = 0.1;
-    const cam_radius: f32 = 0.3; // Camera collision radius
+    const cam_radius: f32 = 0.3;
 
     const start_time = try Io.Clock.Timestamp.now(io, .awake);
     var last_time = start_time;
@@ -88,6 +88,9 @@ pub fn main(init: std.process.Init) !void {
 
         // Input
         core.pollEvents();
+
+        // Handle resize + get current aspect ratio
+        const aspect = core.updateSize();
 
         // 1. Mouse Look
         cam_yaw += core.app.mouse_dx * mouse_sensitivity;
@@ -120,14 +123,14 @@ pub fn main(init: std.process.Init) !void {
         if (core.app.isPressed(.Q)) cam_pos = Vec3.add(cam_pos, Vec3.scale(world_up, velocity));
         if (core.app.isPressed(.E)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(world_up, velocity));
 
-        // 4. Camera Collision — push camera out of any cubes
+        // 4. Camera Collision
         const resolved = Zetal.systems.resolveCamera(&world, cam_pos.x, cam_pos.y, cam_pos.z, cam_radius);
         cam_pos = Vec3.init(resolved.x, resolved.y, resolved.z);
 
-        // 5. View-Projection Matrix
+        // 5. View-Projection Matrix (dynamic aspect ratio)
         const center = Vec3.add(cam_pos, front);
         const view_mat = Math.Mat4x4.lookAt(cam_pos, center, cam_up);
-        const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), 800.0 / 600.0, 0.1, 100.0);
+        const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), aspect, 0.1, 100.0);
         const view_proj = Math.Mat4x4.mul(proj_mat, view_mat);
 
         // 6. ECS Systems
@@ -142,7 +145,7 @@ pub fn main(init: std.process.Init) !void {
         const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(instance_buffer.contents())));
         const drawn = Zetal.systems.buildInstanceBuffer(&world, view_proj, gpu_mvps);
 
-        // 7. Render — ONE draw call for all instances
+        // 7. Render
         const bg_color = Zetal.render.MTLClearColor{ .red = 0.1, .green = 0.1, .blue = 0.1, .alpha = 1.0 };
         if (core.beginFrame(bg_color)) |frame| {
             frame.enc.setRenderPipelineState(pipeline_state.handle);

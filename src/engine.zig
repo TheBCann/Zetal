@@ -11,31 +11,24 @@ pub const Core = struct {
     win: window.Window,
     view: window.MetalView,
     depth_texture: objc.Object,
+    pixel_w: u64,
+    pixel_h: u64,
 
     const CGSize = extern struct { width: f64, height: f64 };
 
     pub fn init() !Core {
-        // 1. System Setup
         const device = root.MetalDevice.createSystemDefault() orelse return error.NoDevice;
         const queue = device.createCommandQueue() orelse return error.NoQueue;
         const app = window.App.init();
 
-        // 2. Window Setup
         const win = window.Window.create(800, 600, "Zetal Engine") orelse return error.WindowFailed;
         const view = window.MetalView.create(.{ .origin_x = 0, .origin_y = 0, .width = 800, .height = 600 }, device.handle) orelse return error.ViewFailed;
         win.setContentView(view);
 
-        // 3. Query ACTUAL pixel size from MTKView (Retina-aware)
-        //    On a 2x Retina display, an 800x600 point window = 1600x1200 pixels.
-        //    The depth texture MUST match the drawable's pixel dimensions.
-        const size_sel = objc.getSelector("drawableSize");
-        const SizeFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) CGSize;
-        const size_msg: SizeFn = @ptrCast(&objc.objc_msgSend);
-        const drawable_size = size_msg(view.handle, size_sel);
+        const drawable_size = getDrawableSize(view);
         const pixel_w: u64 = @intFromFloat(drawable_size.width);
         const pixel_h: u64 = @intFromFloat(drawable_size.height);
 
-        // 4. Shared Resources (Depth Buffer at pixel resolution)
         const depth_texture = device.createDepthTexture(pixel_w, pixel_h) orelse return error.DepthTextureFailed;
 
         return Core{
@@ -45,7 +38,38 @@ pub const Core = struct {
             .win = win,
             .view = view,
             .depth_texture = depth_texture,
+            .pixel_w = pixel_w,
+            .pixel_h = pixel_h,
         };
+    }
+
+    fn getDrawableSize(view: window.MetalView) CGSize {
+        const size_sel = objc.getSelector("drawableSize");
+        const SizeFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) CGSize;
+        const size_msg: SizeFn = @ptrCast(&objc.objc_msgSend);
+        return size_msg(view.handle, size_sel);
+    }
+
+    /// Check if drawable size changed (window resize / fullscreen) and
+    /// recreate the depth texture if needed. Returns current aspect ratio.
+    pub fn updateSize(self: *Core) f32 {
+        const drawable_size = getDrawableSize(self.view);
+        const new_w: u64 = @intFromFloat(drawable_size.width);
+        const new_h: u64 = @intFromFloat(drawable_size.height);
+
+        if (new_w != self.pixel_w or new_h != self.pixel_h) {
+            self.pixel_w = new_w;
+            self.pixel_h = new_h;
+
+            // Recreate depth texture at new size
+            if (self.device.createDepthTexture(new_w, new_h)) |new_depth| {
+                // TODO: release old depth_texture (currently leaks — needs ObjC release call)
+                self.depth_texture = new_depth;
+            }
+        }
+
+        if (self.pixel_h == 0) return 1.0;
+        return @as(f32, @floatFromInt(self.pixel_w)) / @as(f32, @floatFromInt(self.pixel_h));
     }
 
     pub fn pollEvents(self: *Core) void {
@@ -69,18 +93,15 @@ pub const Core = struct {
     pub fn beginFrame(self: Core, clear_color: render.MTLClearColor) ?Frame {
         const drawable = self.view.nextDrawable() orelse return null;
 
-        // Get Texture from Drawable
         const tex_sel = objc.getSelector("texture");
         const GetTexFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
         const get_tex: GetTexFn = @ptrCast(&objc.objc_msgSend);
         const texture = get_tex(drawable, tex_sel) orelse return null;
 
-        // Create Pass Descriptor
         const pass = render.MetalRenderPassDescriptor.create() orelse return null;
         pass.setColorAttachment(0, texture, .Clear, .Store, clear_color);
         pass.setDepthAttachment(self.depth_texture, 1.0);
 
-        // Create Encoders
         const cmd_buffer = self.queue.createCommandBuffer() orelse return null;
         const encoder = cmd_buffer.createRenderCommandEncoder(pass) orelse return null;
 
