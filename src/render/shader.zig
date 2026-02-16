@@ -28,14 +28,75 @@ pub const triangle_source =
     \\ };
     \\
     \\ // ===========================================
-    \\ // SHADOW PASS — depth only from light's POV
+    \\ // SKYBOX
+    \\ // ===========================================
+    \\
+    \\ struct SkyboxOut {
+    \\     float4 position [[position]];
+    \\     float3 direction;
+    \\ };
+    \\
+    \\ vertex SkyboxOut skybox_vertex(
+    \\     uint vertexID [[vertex_id]],
+    \\     constant float4 *vertices [[buffer(0)]],
+    \\     constant float4x4 &viewProj [[buffer(1)]]
+    \\ ) {
+    \\     SkyboxOut out;
+    \\     float3 pos = vertices[vertexID].xyz;
+    \\     out.direction = pos;
+    \\
+    \\     // Strip translation from view-projection so sky stays centered on camera
+    \\     float4 clipPos = viewProj * float4(pos, 0.0);
+    \\     // Set z = w so depth is always max (drawn behind everything)
+    \\     out.position = clipPos.xyww;
+    \\     return out;
+    \\ }
+    \\
+    \\ fragment float4 skybox_fragment(
+    \\     SkyboxOut in [[stage_in]],
+    \\     constant float3 &sunDir [[buffer(0)]]
+    \\ ) {
+    \\     float3 dir = normalize(in.direction);
+    \\     float y = dir.y;
+    \\
+    \\     // Sky gradient: deep blue at zenith, lighter at horizon, warm below
+    \\     float3 zenith = float3(0.15, 0.25, 0.55);
+    \\     float3 horizon = float3(0.6, 0.7, 0.85);
+    \\     float3 ground = float3(0.2, 0.2, 0.18);
+    \\
+    \\     float3 sky;
+    \\     if (y > 0.0) {
+    \\         // Above horizon: blend horizon -> zenith
+    \\         float t = pow(y, 0.4);
+    \\         sky = mix(horizon, zenith, t);
+    \\     } else {
+    \\         // Below horizon: blend horizon -> ground
+    \\         float t = pow(clamp(-y, 0.0, 1.0), 0.5);
+    \\         sky = mix(horizon, ground, t);
+    \\     }
+    \\
+    \\     // Sun disc
+    \\     float3 sunDirection = normalize(sunDir);
+    \\     float sunDot = dot(dir, sunDirection);
+    \\     float sunDisc = smoothstep(0.9975, 0.999, sunDot);
+    \\     float3 sunColor = float3(1.0, 0.95, 0.8);
+    \\     sky = mix(sky, sunColor, sunDisc);
+    \\
+    \\     // Sun glow
+    \\     float glow = pow(max(sunDot, 0.0), 64.0);
+    \\     sky += float3(1.0, 0.8, 0.4) * glow * 0.3;
+    \\
+    \\     return float4(sky, 1.0);
+    \\ }
+    \\
+    \\ // ===========================================
+    \\ // SHADOW PASS
     \\ // ===========================================
     \\
     \\ struct ShadowOut {
     \\     float4 position [[position]];
     \\ };
     \\
-    \\ // Shadow pass for instanced objects (cubes)
     \\ vertex ShadowOut shadow_vertex(
     \\     uint vertexID [[vertex_id]],
     \\     uint instanceID [[instance_id]],
@@ -47,7 +108,6 @@ pub const triangle_source =
     \\     return out;
     \\ }
     \\
-    \\ // Shadow pass for single objects (ground)
     \\ vertex ShadowOut shadow_vertex_single(
     \\     uint vertexID [[vertex_id]],
     \\     constant Vertex *vertices [[buffer(0)]],
@@ -59,7 +119,7 @@ pub const triangle_source =
     \\ }
     \\
     \\ // ===========================================
-    \\ // MAIN PASS — instanced vertex shader
+    \\ // MAIN PASS — instanced
     \\ // ===========================================
     \\
     \\ vertex VertexOut vertex_main(
@@ -89,7 +149,7 @@ pub const triangle_source =
     \\ }
     \\
     \\ // ===========================================
-    \\ // MAIN PASS — single object vertex shader
+    \\ // MAIN PASS — single object
     \\ // ===========================================
     \\
     \\ vertex VertexOut vertex_single(
@@ -116,26 +176,19 @@ pub const triangle_source =
     \\ }
     \\
     \\ // ===========================================
-    \\ // BLINN-PHONG + SHADOW FRAGMENT SHADER
+    \\ // BLINN-PHONG + SHADOW FRAGMENT
     \\ // ===========================================
     \\
     \\ float shadowCalc(float4 lightSpacePos, depth2d<float> shadowMap) {
-    \\     // Perspective divide (orthographic: w=1, but good practice)
     \\     float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
-    \\
-    \\     // Transform from NDC [-1,1] to texture coords [0,1]
-    \\     // Metal NDC: x,y in [-1,1], z in [0,1]
     \\     float2 shadowUV = projCoords.xy * 0.5 + 0.5;
-    \\     shadowUV.y = 1.0 - shadowUV.y; // Flip Y for Metal texture coords
+    \\     shadowUV.y = 1.0 - shadowUV.y;
     \\
-    \\     // Outside shadow map — not in shadow
     \\     if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0) {
     \\         return 0.0;
     \\     }
     \\
     \\     float currentDepth = projCoords.z;
-    \\
-    \\     // PCF (percentage-closer filtering) 3x3
     \\     constexpr sampler shadowSampler(coord::normalized, filter::linear, address::clamp_to_edge, compare_func::less);
     \\     float shadow = 0.0;
     \\     float bias = 0.005;
@@ -149,7 +202,6 @@ pub const triangle_source =
     \\         }
     \\     }
     \\     shadow /= 9.0;
-    \\
     \\     return shadow;
     \\ }
     \\
@@ -166,22 +218,17 @@ pub const triangle_source =
     \\     float3 lightDir = normalize(light.lightPos - in.worldPos);
     \\     float3 viewDir = normalize(light.viewPos - in.worldPos);
     \\
-    \\     // Ambient
     \\     float3 ambient = light.ambientStrength * light.lightColor;
     \\
-    \\     // Diffuse
     \\     float diff = max(dot(norm, lightDir), 0.0);
     \\     float3 diffuse = diff * light.lightColor;
     \\
-    \\     // Specular (Blinn-Phong)
     \\     float3 halfDir = normalize(lightDir + viewDir);
     \\     float spec = pow(max(dot(norm, halfDir), 0.0), light.shininess);
     \\     float3 specular = light.specularStrength * spec * light.lightColor;
     \\
-    \\     // Shadow
     \\     float shadow = shadowCalc(in.lightSpacePos, shadowMap);
     \\
-    \\     // Combine: ambient always visible, diffuse+specular reduced by shadow
     \\     float3 result = (ambient + (1.0 - shadow) * (diffuse + specular)) * in.color.rgb * texColor.rgb;
     \\     return float4(result, 1.0);
     \\ }

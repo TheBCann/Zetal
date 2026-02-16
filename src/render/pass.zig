@@ -41,6 +41,12 @@ pub const MetalRenderPassDescriptor = struct {
         }
     }
     pub fn setDepthAttachment(self: MetalRenderPassDescriptor, texture: objc.Object, clearDepth: f64) void {
+        self.setDepthAttachmentWithStore(texture, clearDepth, 0); // DontCare
+    }
+
+    /// Like setDepthAttachment but with configurable store action.
+    /// storeAction: 0 = DontCare, 1 = Store, 2 = MultisampleResolve
+    pub fn setDepthAttachmentWithStore(self: MetalRenderPassDescriptor, texture: objc.Object, clearDepth: f64, storeAction: u64) void {
         const attach_sel = objc.getSelector("depthAttachment");
         const AttachFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
         const attach_msg: AttachFn = @ptrCast(&objc.objc_msgSend);
@@ -52,11 +58,11 @@ pub const MetalRenderPassDescriptor = struct {
             const setLoad_sel = objc.getSelector("setLoadAction:");
             const SetLoadFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
             const set_load: SetLoadFn = @ptrCast(&objc.objc_msgSend);
-            set_load(att, setLoad_sel, 2);
+            set_load(att, setLoad_sel, 2); // Clear
             const setStore_sel = objc.getSelector("setStoreAction:");
             const SetStoreFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
             const set_store: SetStoreFn = @ptrCast(&objc.objc_msgSend);
-            set_store(att, setStore_sel, 0);
+            set_store(att, setStore_sel, storeAction);
             const setClear_sel = objc.getSelector("setClearDepth:");
             const SetClearFn = *const fn (objc.Object, ?objc.Selector, f64) callconv(.c) void;
             const set_clear: SetClearFn = @ptrCast(&objc.objc_msgSend);

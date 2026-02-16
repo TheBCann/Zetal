@@ -11,7 +11,6 @@ fn simpleSleep(ns: u64) void {
     _ = std.c.nanosleep(&ts, null);
 }
 
-// Light uniforms — must match Metal struct layout (float3 = 16-byte aligned)
 const LightUniforms = extern struct {
     light_pos: [3]f32,
     _pad0: f32 = 0,
@@ -25,7 +24,6 @@ const LightUniforms = extern struct {
     _pad3: f32 = 0,
 };
 
-/// Orthographic projection matrix (Metal NDC: z in [0,1])
 fn ortho(left: f32, right_: f32, bottom: f32, top: f32, near: f32, far: f32) Math.Mat4x4 {
     const rl = right_ - left;
     const tb = top - bottom;
@@ -40,6 +38,61 @@ fn ortho(left: f32, right_: f32, bottom: f32, top: f32, near: f32, far: f32) Mat
     return m;
 }
 
+/// Create a depth stencil state with raw ObjC: depthWrite OFF, compare Always.
+fn createSkyboxDepthState(device: Zetal.MetalDevice) ?Zetal.render.pipeline.MetalDepthStencilState {
+    const desc_class = Zetal.objc.objc_getClass("MTLDepthStencilDescriptor");
+    const alloc_sel = Zetal.objc.getSelector("alloc");
+    const init_sel = Zetal.objc.getSelector("init");
+
+    const AllocFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const alloc_msg: AllocFn = @ptrCast(&Zetal.objc.objc_msgSend);
+    var desc = alloc_msg(desc_class, alloc_sel);
+
+    const InitFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const init_msg: InitFn = @ptrCast(&Zetal.objc.objc_msgSend);
+    desc = init_msg(desc, init_sel);
+
+    // setDepthCompareFunction: 3 = LessEqual
+    const cmp_sel = Zetal.objc.getSelector("setDepthCompareFunction:");
+    const CmpFn = *const fn (?*anyopaque, ?*anyopaque, u64) callconv(.c) void;
+    const cmp_msg: CmpFn = @ptrCast(&Zetal.objc.objc_msgSend);
+    cmp_msg(desc, cmp_sel, 3);
+
+    // setDepthWriteEnabled: false
+    const write_sel = Zetal.objc.getSelector("setDepthWriteEnabled:");
+    const WriteFn = *const fn (?*anyopaque, ?*anyopaque, bool) callconv(.c) void;
+    const write_msg: WriteFn = @ptrCast(&Zetal.objc.objc_msgSend);
+    write_msg(desc, write_sel, false);
+
+    const new_sel = Zetal.objc.getSelector("newDepthStencilStateWithDescriptor:");
+    const NewFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?Zetal.objc.Object;
+    const new_msg: NewFn = @ptrCast(&Zetal.objc.objc_msgSend);
+    if (new_msg(device.handle, new_sel, desc)) |s| return Zetal.render.pipeline.MetalDepthStencilState{ .handle = s };
+    return null;
+}
+
+// Skybox cube vertices (inside-facing, 36 verts, just float4 positions)
+const skybox_verts = [36][4]f32{
+    // +Z face (looking inward)
+    .{ -1, 1, 1, 1 },  .{ -1, -1, 1, 1 },  .{ 1, -1, 1, 1 },
+    .{ -1, 1, 1, 1 },  .{ 1, -1, 1, 1 },   .{ 1, 1, 1, 1 },
+    // -Z face
+    .{ 1, 1, -1, 1 },  .{ 1, -1, -1, 1 },  .{ -1, -1, -1, 1 },
+    .{ 1, 1, -1, 1 },  .{ -1, -1, -1, 1 }, .{ -1, 1, -1, 1 },
+    // +X face
+    .{ 1, 1, 1, 1 },   .{ 1, -1, 1, 1 },   .{ 1, -1, -1, 1 },
+    .{ 1, 1, 1, 1 },   .{ 1, -1, -1, 1 },  .{ 1, 1, -1, 1 },
+    // -X face
+    .{ -1, 1, -1, 1 }, .{ -1, -1, -1, 1 }, .{ -1, -1, 1, 1 },
+    .{ -1, 1, -1, 1 }, .{ -1, -1, 1, 1 },  .{ -1, 1, 1, 1 },
+    // +Y face (ceiling)
+    .{ -1, 1, -1, 1 }, .{ -1, 1, 1, 1 },   .{ 1, 1, 1, 1 },
+    .{ -1, 1, -1, 1 }, .{ 1, 1, 1, 1 },    .{ 1, 1, -1, 1 },
+    // -Y face (floor)
+    .{ -1, -1, 1, 1 }, .{ -1, -1, -1, 1 }, .{ 1, -1, -1, 1 },
+    .{ -1, -1, 1, 1 }, .{ 1, -1, -1, 1 },  .{ 1, -1, 1, 1 },
+};
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -48,7 +101,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (Shadow Mapping)...\n", .{});
+    try stdout.print("Starting Zetal Engine (Skybox + Shadows)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
@@ -63,9 +116,6 @@ pub fn main(init: std.process.Init) !void {
     try Zetal.scene.spawnCubeField(&world, 100);
     const instance_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
 
-    try stdout.print("ECS: {d} entities.\n", .{world.count});
-    try stdout.flush();
-
     // Upload Texture
     const texture = core.device.createTexture(ppm.width, ppm.height, 70).?;
     const region = Zetal.MTLRegion{ .origin = .{ .x = 0, .y = 0, .z = 0 }, .size = .{ .width = ppm.width, .height = ppm.height, .depth = 1 } };
@@ -74,7 +124,9 @@ pub fn main(init: std.process.Init) !void {
     // --- SHADER LIBRARY ---
     const library = core.device.createLibrary(Zetal.render.shader.triangle_source).?;
 
-    // --- CUBE PIPELINE (instanced, main pass) ---
+    // --- PIPELINES ---
+
+    // Cube pipeline (instanced)
     const cube_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
     cube_pipe_desc.setVertexFunction(library.getFunction("vertex_main").?.handle);
     cube_pipe_desc.setFragmentFunction(library.getFunction("fragment_main").?.handle);
@@ -82,7 +134,7 @@ pub fn main(init: std.process.Init) !void {
     cube_pipe_desc.setDepthAttachmentPixelFormat(252);
     const cube_pipeline = core.device.createRenderPipelineState(cube_pipe_desc).?;
 
-    // --- GROUND PIPELINE (single object, main pass) ---
+    // Ground pipeline (single)
     const ground_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
     ground_pipe_desc.setVertexFunction(library.getFunction("vertex_single").?.handle);
     ground_pipe_desc.setFragmentFunction(library.getFunction("fragment_main").?.handle);
@@ -90,24 +142,36 @@ pub fn main(init: std.process.Init) !void {
     ground_pipe_desc.setDepthAttachmentPixelFormat(252);
     const ground_pipeline = core.device.createRenderPipelineState(ground_pipe_desc).?;
 
-    // --- SHADOW PIPELINE (instanced, depth-only) ---
+    // Shadow pipeline (instanced, depth-only)
     const shadow_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
     shadow_pipe_desc.setVertexFunction(library.getFunction("shadow_vertex").?.handle);
-    // No fragment function for depth-only pass
     shadow_pipe_desc.setDepthAttachmentPixelFormat(252);
     const shadow_pipeline = core.device.createRenderPipelineState(shadow_pipe_desc).?;
 
-    // --- SHADOW PIPELINE SINGLE (ground, depth-only) ---
+    // Shadow ground pipeline (single, depth-only)
     const shadow_ground_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
     shadow_ground_desc.setVertexFunction(library.getFunction("shadow_vertex_single").?.handle);
     shadow_ground_desc.setDepthAttachmentPixelFormat(252);
     const shadow_ground_pipeline = core.device.createRenderPipelineState(shadow_ground_desc).?;
 
-    // --- DEPTH STATE ---
+    // Skybox pipeline
+    const sky_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
+    sky_pipe_desc.setVertexFunction(library.getFunction("skybox_vertex").?.handle);
+    sky_pipe_desc.setFragmentFunction(library.getFunction("skybox_fragment").?.handle);
+    sky_pipe_desc.setColorAttachmentPixelFormat(0, 80);
+    sky_pipe_desc.setDepthAttachmentPixelFormat(252);
+    const sky_pipeline = core.device.createRenderPipelineState(sky_pipe_desc).?;
+
+    // --- DEPTH STATES ---
+
+    // Normal: depth write ON, compare Less
     const depth_desc = Zetal.render.pipeline.MetalDepthStencilDescriptor.create().?;
     depth_desc.setDepthCompareFunction(.Less);
     depth_desc.setDepthWriteEnabled(true);
     const depth_state = core.device.createDepthStencilState(depth_desc).?;
+
+    // Skybox: depth write OFF, compare LessEqual (skybox z = 1.0 = clear depth)
+    const sky_depth_state = createSkyboxDepthState(core.device).?;
 
     // --- CUBE BUFFERS ---
     const Vertex = Zetal.render.vertex.Vertex;
@@ -137,7 +201,11 @@ pub fn main(init: std.process.Init) !void {
     const ground_ibuf = core.device.createBuffer(@sizeOf(u32) * ground_indices.len, .StorageModeShared).?;
     @memcpy(@as([*]u32, @ptrCast(@alignCast(ground_ibuf.contents())))[0..ground_indices.len], &ground_indices);
 
-    try stdout.print("Engine Ready. {d} cubes + ground, Blinn-Phong + Shadow Mapping.\n", .{instance_count});
+    // --- SKYBOX BUFFER ---
+    const sky_vbuf = core.device.createBuffer(@sizeOf([4]f32) * 36, .StorageModeShared).?;
+    @memcpy(@as([*][4]f32, @ptrCast(@alignCast(sky_vbuf.contents())))[0..36], &skybox_verts);
+
+    try stdout.print("Engine Ready. {d} cubes + ground + skybox.\n", .{instance_count});
     try stdout.flush();
 
     // --- CAMERA STATE ---
@@ -160,14 +228,13 @@ pub fn main(init: std.process.Init) !void {
         core.pollEvents();
         const aspect = core.updateSize();
 
-        // 1. Mouse Look
+        // Mouse Look
         cam_yaw += core.app.mouse_dx * mouse_sensitivity;
         cam_pitch += core.app.mouse_dy * mouse_sensitivity;
-
         if (cam_pitch > 89.0) cam_pitch = 89.0;
         if (cam_pitch < -89.0) cam_pitch = -89.0;
 
-        // 2. Camera Vectors
+        // Camera Vectors
         const yaw_rad = std.math.degreesToRadians(cam_yaw);
         const pitch_rad = std.math.degreesToRadians(cam_pitch);
 
@@ -181,7 +248,7 @@ pub fn main(init: std.process.Init) !void {
         const right = Vec3.norm(Vec3.cross(front, world_up));
         const cam_up = Vec3.norm(Vec3.cross(right, front));
 
-        // 3. Movement
+        // Movement
         const velocity = move_speed * dt_sec;
         if (core.app.isPressed(.W)) cam_pos = Vec3.add(cam_pos, Vec3.scale(front, velocity));
         if (core.app.isPressed(.S)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(front, velocity));
@@ -190,24 +257,24 @@ pub fn main(init: std.process.Init) !void {
         if (core.app.isPressed(.Q)) cam_pos = Vec3.add(cam_pos, Vec3.scale(world_up, velocity));
         if (core.app.isPressed(.E)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(world_up, velocity));
 
-        // 4. Camera Collision
+        // Camera Collision
         const resolved = Zetal.systems.resolveCamera(&world, cam_pos.x, cam_pos.y, cam_pos.z, cam_radius);
         cam_pos = Vec3.init(resolved.x, resolved.y, resolved.z);
 
-        // 5. Camera View-Projection
+        // View-Projection
         const center = Vec3.add(cam_pos, front);
         const view_mat = Math.Mat4x4.lookAt(cam_pos, center, cam_up);
         const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), aspect, 0.1, 200.0);
         const view_proj = Math.Mat4x4.mul(proj_mat, view_mat);
 
-        // 6. Light View-Projection (orthographic from light position)
+        // Light View-Projection
         const light_pos = Vec3.init(10.0, 20.0, 10.0);
-        const light_target = Vec3.init(0.0, -5.0, -10.0); // Center of cube field
+        const light_target = Vec3.init(0.0, -5.0, -10.0);
         const light_view = Math.Mat4x4.lookAt(light_pos, light_target, Vec3.init(0, 1, 0));
         const light_proj = ortho(-30.0, 30.0, -30.0, 30.0, 0.1, 60.0);
         const light_vp = Math.Mat4x4.mul(light_proj, light_view);
 
-        // 7. ECS Systems
+        // ECS Systems
         const total_elapsed = start_time.durationTo(now).raw.toMilliseconds();
         const time_sec = @as(f32, @floatFromInt(total_elapsed)) / 1000.0;
 
@@ -215,18 +282,18 @@ pub fn main(init: std.process.Init) !void {
         Zetal.systems.velocitySystem(&world, dt_sec);
         Zetal.systems.collisionSystem(&world);
 
-        // Build camera instance buffers (MVPs + Models)
+        // Build instance buffers
         const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(mvp_buffer.contents())));
         const gpu_models = @as([*]Math.Mat4x4, @ptrCast(@alignCast(model_buffer.contents())));
         const drawn = Zetal.systems.buildInstanceBuffer(&world, view_proj, gpu_mvps, gpu_models);
 
-        // Build shadow instance buffer (light-space MVPs from model matrices)
+        // Shadow MVPs
         const gpu_shadow_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(shadow_mvp_buffer.contents())));
         for (0..drawn) |idx| {
             gpu_shadow_mvps[idx] = Math.Mat4x4.mul(light_vp, gpu_models[idx]);
         }
 
-        // 8. Light uniforms
+        // Light uniforms
         var light = LightUniforms{
             .light_pos = .{ 10.0, 20.0, 10.0 },
             .view_pos = .{ cam_pos.x, cam_pos.y, cam_pos.z },
@@ -237,92 +304,78 @@ pub fn main(init: std.process.Init) !void {
         };
         _ = &light;
 
+        // Sun direction (matches light position, normalized)
+        var sun_dir = [3]f32{ 10.0, 20.0, 10.0 };
+        _ = &sun_dir;
+        const sun_len = @sqrt(sun_dir[0] * sun_dir[0] + sun_dir[1] * sun_dir[1] + sun_dir[2] * sun_dir[2]);
+        sun_dir[0] /= sun_len;
+        sun_dir[1] /= sun_len;
+        sun_dir[2] /= sun_len;
+
         // Ground matrices
         const ground_model = Math.Mat4x4.identity();
         const ground_mvp = Math.Mat4x4.mul(view_proj, ground_model);
         const ground_shadow_mvp = Math.Mat4x4.mul(light_vp, ground_model);
 
         // =============================================
-        // PASS 1: SHADOW MAP (depth-only from light)
+        // PASS 1: SHADOW MAP
         // =============================================
         if (core.beginShadowPass()) |shadow| {
             shadow.enc.setDepthStencilState(depth_state.handle);
 
-            // Draw cubes into shadow map (instanced)
+            // Cubes
             shadow.enc.setRenderPipelineState(shadow_pipeline.handle);
             shadow.enc.setVertexBuffer(vertex_buffer.handle, 0, 0);
             shadow.enc.setVertexBuffer(shadow_mvp_buffer.handle, 0, 1);
+            shadow.enc.drawIndexedPrimitivesInstanced(.Triangle, model.indices.len, .UInt32, index_buffer.handle, 0, drawn);
 
-            shadow.enc.drawIndexedPrimitivesInstanced(
-                .Triangle,
-                model.indices.len,
-                .UInt32,
-                index_buffer.handle,
-                0,
-                drawn,
-            );
-
-            // Draw ground into shadow map
+            // Ground
             shadow.enc.setRenderPipelineState(shadow_ground_pipeline.handle);
             shadow.enc.setVertexBuffer(ground_vbuf.handle, 0, 0);
             shadow.enc.setVertexBytes(@ptrCast(&ground_shadow_mvp), @sizeOf(Math.Mat4x4), 1);
-
-            shadow.enc.drawIndexedPrimitives(
-                .Triangle,
-                ground_indices.len,
-                .UInt32,
-                ground_ibuf.handle,
-                0,
-            );
+            shadow.enc.drawIndexedPrimitives(.Triangle, ground_indices.len, .UInt32, ground_ibuf.handle, 0);
 
             shadow.enc.endEncoding();
             shadow.cmd.commit();
         }
 
         // =============================================
-        // PASS 2: MAIN RENDER (color + depth + shadows)
+        // PASS 2: MAIN RENDER
         // =============================================
-        const bg_color = Zetal.render.MTLClearColor{ .red = 0.05, .green = 0.05, .blue = 0.08, .alpha = 1.0 };
+        const bg_color = Zetal.render.MTLClearColor{ .red = 0.0, .green = 0.0, .blue = 0.0, .alpha = 1.0 };
         if (core.beginFrame(bg_color)) |frame| {
+
+            // --- SKYBOX (draw first, no depth write, LessEqual) ---
+            frame.enc.setDepthStencilState(sky_depth_state.handle);
+            frame.enc.setRenderPipelineState(sky_pipeline.handle);
+            frame.enc.setVertexBuffer(sky_vbuf.handle, 0, 0);
+            frame.enc.setVertexBytes(@ptrCast(&view_proj), @sizeOf(Math.Mat4x4), 1);
+            frame.enc.setFragmentBytes(@ptrCast(&sun_dir), @sizeOf([3]f32), 0);
+            frame.enc.drawPrimitives(.Triangle, 0, 36);
+
+            // --- Switch to normal depth state ---
             frame.enc.setDepthStencilState(depth_state.handle);
 
             // Bind textures
-            frame.enc.setFragmentTexture(texture.handle, 0); // Diffuse texture
-            frame.enc.setFragmentTexture(core.shadow_map.handle, 1); // Shadow map
-
-            // Fragment uniforms
+            frame.enc.setFragmentTexture(texture.handle, 0);
+            frame.enc.setFragmentTexture(core.shadow_map.handle, 1);
             frame.enc.setFragmentBytes(@ptrCast(&light), @sizeOf(LightUniforms), 2);
 
-            // --- DRAW CUBES (instanced) ---
+            // --- CUBES (instanced) ---
             frame.enc.setRenderPipelineState(cube_pipeline.handle);
             frame.enc.setVertexBuffer(vertex_buffer.handle, 0, 0);
             frame.enc.setVertexBuffer(mvp_buffer.handle, 0, 1);
             frame.enc.setVertexBuffer(model_buffer.handle, 0, 3);
             frame.enc.setVertexBytes(@ptrCast(&light_vp), @sizeOf(Math.Mat4x4), 4);
+            frame.enc.drawIndexedPrimitivesInstanced(.Triangle, model.indices.len, .UInt32, index_buffer.handle, 0, drawn);
 
-            frame.enc.drawIndexedPrimitivesInstanced(
-                .Triangle,
-                model.indices.len,
-                .UInt32,
-                index_buffer.handle,
-                0,
-                drawn,
-            );
-
-            // --- DRAW GROUND (single) ---
+            // --- GROUND (single) ---
             frame.enc.setRenderPipelineState(ground_pipeline.handle);
             frame.enc.setVertexBuffer(ground_vbuf.handle, 0, 0);
             frame.enc.setVertexBytes(@ptrCast(&ground_mvp), @sizeOf(Math.Mat4x4), 1);
             frame.enc.setVertexBytes(@ptrCast(&ground_model), @sizeOf(Math.Mat4x4), 3);
             frame.enc.setVertexBytes(@ptrCast(&light_vp), @sizeOf(Math.Mat4x4), 4);
-
-            frame.enc.drawIndexedPrimitives(
-                .Triangle,
-                ground_indices.len,
-                .UInt32,
-                ground_ibuf.handle,
-                0,
-            );
+            frame.enc.drawIndexedPrimitives(.Triangle, ground_indices.len, .UInt32, ground_ibuf.handle, 0);
 
             frame.submit();
         }

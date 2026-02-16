@@ -96,8 +96,8 @@ pub const Core = struct {
     pub fn beginShadowPass(self: Core) ?struct { cmd: root.MetalCommandBuffer, enc: render.MetalRenderCommandEncoder } {
         const pass = render.MetalRenderPassDescriptor.create() orelse return null;
 
-        // Depth-only: no color attachment, just depth
-        pass.setDepthAttachment(self.shadow_map.handle, 1.0);
+        // Depth-only: no color attachment, just depth (Store so main pass can sample it)
+        pass.setDepthAttachmentWithStore(self.shadow_map.handle, 1.0, 1); // 1 = Store
 
         const cmd_buffer = self.queue.createCommandBuffer() orelse return null;
         const encoder = cmd_buffer.createRenderCommandEncoder(pass) orelse return null;
