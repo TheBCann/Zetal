@@ -224,6 +224,35 @@ pub const MetalDevice = struct {
 
         return new_tex_msg(self.handle, newTex_sel, tex_desc);
     }
+
+    /// Like createDepthTexture but with ShaderRead usage so the fragment shader can sample it.
+    pub fn createShadowMap(self: MetalDevice, width: u64, height: u64) ?MetalTexture {
+        const desc_class = objc.objc_getClass("MTLTextureDescriptor");
+        const desc_sel = objc.getSelector("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+        const DescFn = *const fn (?objc.Object, ?objc.Selector, u64, u64, u64, bool) callconv(.c) ?objc.Object;
+        const desc_msg: DescFn = @ptrCast(&objc.objc_msgSend);
+
+        // Depth32Float = 252
+        const tex_desc = desc_msg(desc_class, desc_sel, 252, width, height, false);
+
+        // Usage: RenderTarget (4) + ShaderRead (1) = 5
+        const usage_sel = objc.getSelector("setUsage:");
+        const UsageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const usage_msg: UsageFn = @ptrCast(&objc.objc_msgSend);
+        usage_msg(tex_desc, usage_sel, 5);
+
+        const storage_sel = objc.getSelector("setStorageMode:");
+        const StorageFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const storage_msg: StorageFn = @ptrCast(&objc.objc_msgSend);
+        storage_msg(tex_desc, storage_sel, 2); // Private
+
+        const newTex_sel = objc.getSelector("newTextureWithDescriptor:");
+        const NewTexFn = *const fn (?objc.Object, ?objc.Selector, ?objc.Object) callconv(.c) ?objc.Object;
+        const new_tex_msg: NewTexFn = @ptrCast(&objc.objc_msgSend);
+
+        if (new_tex_msg(self.handle, newTex_sel, tex_desc)) |t| return MetalTexture{ .handle = t };
+        return null;
+    }
 };
 
 test {

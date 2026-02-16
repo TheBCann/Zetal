@@ -11,10 +11,12 @@ pub const Core = struct {
     win: window.Window,
     view: window.MetalView,
     depth_texture: objc.Object,
+    shadow_map: root.MetalTexture,
     pixel_w: u64,
     pixel_h: u64,
 
     const CGSize = extern struct { width: f64, height: f64 };
+    pub const SHADOW_MAP_SIZE: u64 = 2048;
 
     pub fn init() !Core {
         const device = root.MetalDevice.createSystemDefault() orelse return error.NoDevice;
@@ -31,6 +33,9 @@ pub const Core = struct {
 
         const depth_texture = device.createDepthTexture(pixel_w, pixel_h) orelse return error.DepthTextureFailed;
 
+        // Shadow map: depth-only texture, sampled in fragment shader
+        const shadow_map = device.createShadowMap(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE) orelse return error.ShadowMapFailed;
+
         return Core{
             .device = device,
             .queue = queue,
@@ -38,6 +43,7 @@ pub const Core = struct {
             .win = win,
             .view = view,
             .depth_texture = depth_texture,
+            .shadow_map = shadow_map,
             .pixel_w = pixel_w,
             .pixel_h = pixel_h,
         };
@@ -50,8 +56,6 @@ pub const Core = struct {
         return size_msg(view.handle, size_sel);
     }
 
-    /// Check if drawable size changed (window resize / fullscreen) and
-    /// recreate the depth texture if needed. Returns current aspect ratio.
     pub fn updateSize(self: *Core) f32 {
         const drawable_size = getDrawableSize(self.view);
         const new_w: u64 = @intFromFloat(drawable_size.width);
@@ -61,9 +65,7 @@ pub const Core = struct {
             self.pixel_w = new_w;
             self.pixel_h = new_h;
 
-            // Recreate depth texture at new size
             if (self.device.createDepthTexture(new_w, new_h)) |new_depth| {
-                // TODO: release old depth_texture (currently leaks — needs ObjC release call)
                 self.depth_texture = new_depth;
             }
         }
@@ -90,6 +92,26 @@ pub const Core = struct {
         }
     };
 
+    /// Begin the shadow pass — depth-only render into shadow map
+    pub fn beginShadowPass(self: Core) ?struct { cmd: root.MetalCommandBuffer, enc: render.MetalRenderCommandEncoder } {
+        const pass = render.MetalRenderPassDescriptor.create() orelse return null;
+
+        // Depth-only: no color attachment, just depth
+        pass.setDepthAttachment(self.shadow_map.handle, 1.0);
+
+        const cmd_buffer = self.queue.createCommandBuffer() orelse return null;
+        const encoder = cmd_buffer.createRenderCommandEncoder(pass) orelse return null;
+
+        // Set cull mode to front face to reduce shadow acne
+        const cull_sel = objc.getSelector("setCullMode:");
+        const CullFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
+        const cull_msg: CullFn = @ptrCast(&objc.objc_msgSend);
+        cull_msg(encoder.handle, cull_sel, 1); // MTLCullModeFront = 1
+
+        return .{ .cmd = cmd_buffer, .enc = encoder };
+    }
+
+    /// Begin the main color+depth render pass
     pub fn beginFrame(self: Core, clear_color: render.MTLClearColor) ?Frame {
         const drawable = self.view.nextDrawable() orelse return null;
 
