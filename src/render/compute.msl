@@ -2,7 +2,14 @@
 using namespace metal;
 
 // ============================================================
-// GPU-Compatible Structs (must match Zig extern structs exactly)
+// Grid Constants for Spatial Hashing
+// ============================================================
+constant float CELL_SIZE = 2.0;    // Size of one grid cell (tune based on object size)
+constant uint GRID_SIZE = 4099;    // Prime number for better hash distribution
+constant uint EMPTY_NODE = 0xFFFFFFFF; // Marker for empty lists
+
+// ============================================================
+// GPU-Compatible Structs
 // ============================================================
 
 struct GPUTransform {
@@ -37,8 +44,16 @@ struct PhysicsParams {
     uint _pad;
 };
 
+// --- Spatial Hash Function ---
+inline uint hash_pos(float3 pos) {
+    int3 cell = int3(floor(pos / CELL_SIZE));
+    // Industry standard hash primes for 3D coordinates
+    uint h = (uint(cell.x) * 73856093) ^ (uint(cell.y) * 19349663) ^ (uint(cell.z) * 83492791);
+    return h % GRID_SIZE;
+}
+
 // ============================================================
-// Kernel 1: Velocity Integration
+// Kernel 1: Velocity Integration (Unchanged)
 // ============================================================
 
 kernel void integrate_velocity(
@@ -46,25 +61,25 @@ kernel void integrate_velocity(
     device GPUVelocity* velocities [[buffer(1)]],
     device const GPUCollider* colliders  [[buffer(2)]],
     device const uint* masks      [[buffer(3)]],
-    constant PhysicsParams& params [[buffer(4)]],
+    constant PhysicsParams* params     [[buffer(4)]],
     uint id [[thread_position_in_grid]]
 ) {
-    if (id >= params.entity_count) return;
+    if (id >= params->entity_count) return;
 
     uint m = masks[id];
     if ((m & 0x09) != 0x09) return; 
 
     if ((m & 0x10) != 0 && colliders[id].is_static == 0) {
-        velocities[id].y += params.gravity * params.dt;
+        velocities[id].y += params->gravity * params->dt;
     }
 
-    transforms[id].x += velocities[id].x * params.dt;
-    transforms[id].y += velocities[id].y * params.dt;
-    transforms[id].z += velocities[id].z * params.dt;
+    transforms[id].x += velocities[id].x * params->dt;
+    transforms[id].y += velocities[id].y * params->dt;
+    transforms[id].z += velocities[id].z * params->dt;
 }
 
 // ============================================================
-// Kernel 2: Compute AABBs
+// Kernel 2: Compute AABBs (Unchanged)
 // ============================================================
 
 kernel void compute_aabbs(
@@ -72,10 +87,10 @@ kernel void compute_aabbs(
     device const GPUCollider* colliders  [[buffer(1)]],
     device const uint* masks      [[buffer(2)]],
     device GPUAABB* aabbs      [[buffer(3)]],
-    constant PhysicsParams& params [[buffer(4)]],
+    constant PhysicsParams* params     [[buffer(4)]],
     uint id [[thread_position_in_grid]]
 ) {
-    if (id >= params.entity_count) return;
+    if (id >= params->entity_count) return;
 
     if ((masks[id] & 0x11) != 0x11) {
         aabbs[id].min_x =  1e9;  aabbs[id].min_y =  1e9;  aabbs[id].min_z =  1e9;
@@ -84,7 +99,6 @@ kernel void compute_aabbs(
     }
 
     float3 pos = float3(transforms[id].x, transforms[id].y, transforms[id].z);
-    // FIXED: Renamed 'half' to 'h_ext' to avoid keyword conflict
     float3 h_ext = float3(colliders[id].half_x, colliders[id].half_y, colliders[id].half_z);
 
     aabbs[id].min_x = pos.x - h_ext.x;
@@ -96,47 +110,105 @@ kernel void compute_aabbs(
 }
 
 // ============================================================
-// Kernel 3: Broad Phase Collision Detection
+// Kernel 3: Clear Grid (NEW)
 // ============================================================
+kernel void clear_grid(
+    device atomic_uint* cell_heads [[buffer(0)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= GRID_SIZE) return;
+    // Reset all cell linked-list heads to EMPTY_NODE
+    atomic_store_explicit(&cell_heads[id], EMPTY_NODE, memory_order_relaxed);
+}
 
+// ============================================================
+// Kernel 4: Build Grid (NEW)
+// ============================================================
+kernel void build_grid(
+    device const GPUTransform* transforms [[buffer(0)]],
+    device const uint* masks [[buffer(1)]],
+    device atomic_uint* cell_heads [[buffer(2)]],
+    device atomic_uint* next_nodes [[buffer(3)]],
+    constant PhysicsParams* params [[buffer(4)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= params->entity_count) return;
+    if ((masks[id] & 0x11) != 0x11) return;
+
+    float3 pos = float3(transforms[id].x, transforms[id].y, transforms[id].z);
+    uint cell_hash = hash_pos(pos);
+
+    // Atomically insert this entity at the HEAD of the linked list for this cell.
+    // We capture whatever was previously at the head, and set it as our 'next' node.
+    uint prev_head = atomic_exchange_explicit(&cell_heads[cell_hash], id, memory_order_relaxed);
+    atomic_store_explicit(&next_nodes[id], prev_head, memory_order_relaxed);
+}
+
+// ============================================================
+// Kernel 5: Broad Phase (UPDATED)
+// ============================================================
 kernel void broad_phase(
     device const GPUAABB* aabbs      [[buffer(0)]],
     device const uint* masks      [[buffer(1)]],
     device const GPUCollider* colliders  [[buffer(2)]],
     device CollisionPair* pairs      [[buffer(3)]],
     device atomic_uint* pair_count [[buffer(4)]],
-    constant PhysicsParams& params [[buffer(5)]],
+    device atomic_uint* cell_heads [[buffer(5)]],
+    device atomic_uint* next_nodes [[buffer(6)]],
+    constant PhysicsParams* params [[buffer(7)]],
     uint id [[thread_position_in_grid]]
 ) {
-    if (id >= params.entity_count) return;
+    if (id >= params->entity_count) return;
     if ((masks[id] & 0x11) != 0x11) return;
 
     GPUAABB a = aabbs[id];
+    float3 center = float3((a.min_x + a.max_x) * 0.5, (a.min_y + a.max_y) * 0.5, (a.min_z + a.max_z) * 0.5);
+    int3 base_cell = int3(floor(center / CELL_SIZE));
 
-    for (uint j = id + 1; j < params.entity_count; j++) {
-        if ((masks[j] & 0x11) != 0x11) continue;
+    // Only loop over our 3x3x3 neighboring cells
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int3 neighbor_cell = base_cell + int3(dx, dy, dz);
+                uint hash = ((uint(neighbor_cell.x) * 73856093) ^ 
+                             (uint(neighbor_cell.y) * 19349663) ^ 
+                             (uint(neighbor_cell.z) * 83492791)) % GRID_SIZE;
 
-        if (colliders[id].is_static != 0 && colliders[j].is_static != 0) continue;
+                // Traverse the linked list in this specific neighbor cell
+                uint curr = atomic_load_explicit(&cell_heads[hash], memory_order_relaxed);
+                while (curr != EMPTY_NODE) {
+                    uint j = curr;
+                    curr = atomic_load_explicit(&next_nodes[j], memory_order_relaxed);
 
-        GPUAABB b = aabbs[j];
+                    // Prevent double-checking pairs (e.g. A checking B, and B checking A)
+                    // Also prevents self-collision check
+                    if (id >= j) continue;
+                    
+                    if ((masks[j] & 0x11) != 0x11) continue;
+                    if (colliders[id].is_static != 0 && colliders[j].is_static != 0) continue;
 
-        if (a.min_x > b.max_x || a.max_x < b.min_x) continue;
-        if (a.min_y > b.max_y || a.max_y < b.min_y) continue;
-        if (a.min_z > b.max_z || a.max_z < b.min_z) continue;
+                    GPUAABB b = aabbs[j];
 
-        float px = min(a.max_x, b.max_x) - max(a.min_x, b.min_x);
-        float py = min(a.max_y, b.max_y) - max(a.min_y, b.min_y);
-        float pz = min(a.max_z, b.max_z) - max(a.min_z, b.min_z);
+                    if (a.min_x > b.max_x || a.max_x < b.min_x) continue;
+                    if (a.min_y > b.max_y || a.max_y < b.min_y) continue;
+                    if (a.min_z > b.max_z || a.max_z < b.min_z) continue;
 
-        if (px <= 0 || py <= 0 || pz <= 0) continue;
+                    float px = min(a.max_x, b.max_x) - max(a.min_x, b.min_x);
+                    float py = min(a.max_y, b.max_y) - max(a.min_y, b.min_y);
+                    float pz = min(a.max_z, b.max_z) - max(a.min_z, b.min_z);
 
-        uint idx = atomic_fetch_add_explicit(pair_count, 1, memory_order_relaxed);
-        if (idx < 4096) {
-            pairs[idx].a     = id;
-            pairs[idx].b     = j;
-            pairs[idx].pen_x = px;
-            pairs[idx].pen_y = py;
-            pairs[idx].pen_z = pz;
+                    if (px <= 0 || py <= 0 || pz <= 0) continue;
+
+                    uint idx = atomic_fetch_add_explicit(pair_count, 1, memory_order_relaxed);
+                    if (idx < 4096) {
+                        pairs[idx].a     = id;
+                        pairs[idx].b     = j;
+                        pairs[idx].pen_x = px;
+                        pairs[idx].pen_y = py;
+                        pairs[idx].pen_z = pz;
+                    }
+                }
+            }
         }
     }
 }

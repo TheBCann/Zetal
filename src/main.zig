@@ -114,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
 
     // --- ECS WORLD ---
     var world = Zetal.ecs.World.init();
-    try Zetal.scene.spawnCubeField(&world, 100);
+    try Zetal.scene.spawnCubeField(&world, 1000);
     const instance_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
 
     // --- GPU COMPUTE PHYSICS ---
