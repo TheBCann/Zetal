@@ -43,6 +43,16 @@ pub const Collider = struct {
     is_static: bool = true, // Static objects don't get pushed
 };
 
+pub const Health = struct {
+    hp: f32 = 100,
+    max_hp: f32 = 100,
+    hit_timer: f32 = 0,
+};
+
+pub const EnemyTag = struct {
+    _pad: u8 = 0,
+};
+
 // ============================================================
 // COMPONENT MASK (bitfield — one bit per component type)
 // ============================================================
@@ -53,14 +63,16 @@ pub const Component = enum(u8) {
     mesh_renderer = 2,
     velocity = 3,
     collider = 4,
+    health = 5,
+    enemy_tag = 6,
 };
 
-pub const ComponentMask = u8;
+pub const ComponentMask = u16;
 
 pub fn mask(components: []const Component) ComponentMask {
     var m: ComponentMask = 0;
     for (components) |c| {
-        m |= @as(ComponentMask, 1) << @as(u3, @intCast(@intFromEnum(c)));
+        m |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(c)));
     }
     return m;
 }
@@ -120,6 +132,8 @@ pub const World = struct {
     mesh_renderers: [MAX_ENTITIES]MeshRenderer = .{MeshRenderer{}} ** MAX_ENTITIES,
     velocities: [MAX_ENTITIES]Velocity = .{Velocity{}} ** MAX_ENTITIES,
     colliders: [MAX_ENTITIES]Collider = .{Collider{}} ** MAX_ENTITIES,
+    healths: [MAX_ENTITIES]Health = .{Health{}} ** MAX_ENTITIES,
+    enemy_tags: [MAX_ENTITIES]EnemyTag = .{EnemyTag{}} ** MAX_ENTITIES,
 
     pub fn init() World {
         return World{};
@@ -138,27 +152,37 @@ pub const World = struct {
 
     pub fn setTransform(self: *World, e: Entity, t: Transform) void {
         self.transforms[e] = t;
-        self.masks[e] |= @as(ComponentMask, 1) << @as(u3, @intCast(@intFromEnum(Component.transform)));
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.transform)));
     }
 
     pub fn setSpin(self: *World, e: Entity, s: Spin) void {
         self.spins[e] = s;
-        self.masks[e] |= @as(ComponentMask, 1) << @as(u3, @intCast(@intFromEnum(Component.spin)));
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.spin)));
     }
 
     pub fn setMeshRenderer(self: *World, e: Entity, m: MeshRenderer) void {
         self.mesh_renderers[e] = m;
-        self.masks[e] |= @as(ComponentMask, 1) << @as(u3, @intCast(@intFromEnum(Component.mesh_renderer)));
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.mesh_renderer)));
     }
 
     pub fn setVelocity(self: *World, e: Entity, v: Velocity) void {
         self.velocities[e] = v;
-        self.masks[e] |= @as(ComponentMask, 1) << @as(u3, @intCast(@intFromEnum(Component.velocity)));
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.velocity)));
     }
 
     pub fn setCollider(self: *World, e: Entity, c: Collider) void {
         self.colliders[e] = c;
-        self.masks[e] |= @as(ComponentMask, 1) << @as(u3, @intCast(@intFromEnum(Component.collider)));
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.collider)));
+    }
+
+    pub fn setHealth(self: *World, e: Entity, h: Health) void {
+        self.healths[e] = h;
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.health)));
+    }
+
+    pub fn setEnemyTag(self: *World, e: Entity) void {
+        self.enemy_tags[e] = EnemyTag{};
+        self.masks[e] |= @as(ComponentMask, 1) << @as(u4, @intCast(@intFromEnum(Component.enemy_tag)));
     }
 
     // --- Component Getters ---
@@ -173,6 +197,10 @@ pub const World = struct {
 
     pub fn getCollider(self: *World, e: Entity) *Collider {
         return &self.colliders[e];
+    }
+
+    pub fn getHealth(self: *World, e: Entity) *Health {
+        return &self.healths[e];
     }
 
     // --- Queries ---

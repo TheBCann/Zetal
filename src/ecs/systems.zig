@@ -4,6 +4,84 @@ const math = @import("../render/root.zig").math;
 const compute = @import("../render/compute.zig");
 
 // ============================================================
+// HITSCAN SYSTEM — Raycast from camera, damage nearest enemy
+// ============================================================
+
+const enemy_mask = ecs.mask(&.{ .transform, .collider, .health, .enemy_tag });
+
+/// Fire a hitscan ray. Returns the entity ID of the hit enemy, or null.
+/// Applies `damage` to the nearest enemy along the ray within `max_range
+pub fn hitscanSystem(
+    world: *ecs.World,
+    origin: math.Vec3,
+    dir: math.Vec3,
+    damamge: f32,
+    max_range: f32,
+) ?ecs.Entity {
+    var closest_t: f32 = max_range;
+    var hit_entity: ?ecs.Entity = null;
+
+    for (0..world.count) |i| {
+        if (!ecs.hasMask(world.masks[i], enemy_mask)) continue;
+
+        const t = &world.transforms[i];
+        const c = &world.colliders[i];
+
+        const box_min = math.Vec3.init(t.x - c.half_x, t.y - c.half_y, t.z - c.half_z);
+        const box_max = math.Vec3.init(t.x + c.half_x, t.y + c.half_y, t.z + c.half_z);
+
+        if (math.rayIntersectAABB(origin, dir, box_min, box_max)) |dist| {
+            if (dist < closest_t and dist >= 0) {
+                closest_t = dist;
+                hit_entity = @intCast(i);
+            }
+        }
+    }
+
+    if (hit_entity) |e| {
+        const hp = &world.healths[e];
+        hp.hp -= damamge;
+        hp.hit_timer = 1.0; // Flash for ~0.2s (decayed by hitTimerSystem)
+
+        // enemy killed - convert to dynamic ragdoll
+        if (hp.hp <= 0) {
+            hp.hp = 0;
+
+            // Give it velocity so it tumbles
+            world.colliders[0].is_static = false;
+            world.masks[e] |= ecs.mask(&.{.velocity});
+            world.masks[e] &= ~ecs.mask(&.{.enemy_tag}); // No longer targetable
+
+            // Push away from shooter
+            world.velocities[e] = .{
+                .x = dir.x * 8.0,
+                .y = 5.0,
+                .z = dir.z * 8.0,
+            };
+        }
+    }
+
+    return hit_entity;
+}
+
+// ============================================================
+// HIT TIMER SYSTEM — Decay hit flash timers
+// ============================================================
+
+const health_mask = ecs.mask(&.{.health});
+
+pub fn hitTimerSystem(world: *ecs.World, dt: f32) void {
+    for (0..world.count) |i| {
+        if (!ecs.hasMask(world.masks[i], health_mask)) continue;
+
+        if (world.healths[i].hit_timer > 0) {
+            world.healths[i].hit_timer -= dt * 5.0; // ~0.2s flash
+            if (world.healths[i].hit_timer < 0) world.healths[i].hit_timer = 0;
+        }
+    }
+}
+
+// ============================================================
 // SPIN SYSTEM
 // ============================================================
 

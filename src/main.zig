@@ -309,19 +309,28 @@ pub fn main(init: std.process.Init) !void {
         cam_pos = Vec3.init(resolved.x, resolved.y, resolved.z);
 
         // ═══════════════════════════════════════════
-        // FPS FIRE — Left click or Space to shoot
+        // FPS FIRE
         // ═══════════════════════════════════════════
         fire_cooldown -= dt_sec;
         if (fire_cooldown < 0) fire_cooldown = 0;
 
-        const want_fire = core.app.mouse_left_pressed or
-            (core.app.isPressed(.Space) and fire_cooldown <= 0);
+        // LEFT CLICK → Hitscan (instant ray, CS:GO style)
+        if (core.app.mouse_left_pressed and fire_cooldown <= 0) {
+            const hit = Zetal.systems.hitscanSystem(
+                &world,
+                cam_pos,
+                front,
+                35.0, // damage per shot
+                200.0, // max range
+            );
+            _ = hit; // TODO: hit feedback (sound, crosshair flash)
+            fire_cooldown = FIRE_COOLDOWN;
+        }
 
-        if (want_fire and fire_cooldown <= 0) {
-            // Spawn projectile slightly in front of camera
+        // SPACE → Projectile (physics cube, keep for fun)
+        if (core.app.isPressed(.Space) and fire_cooldown <= 0) {
             const spawn_offset = 1.0;
             const spawn_pos = Vec3.add(cam_pos, Vec3.scale(front, spawn_offset));
-
             _ = Zetal.scene.spawnProjectile(
                 &world,
                 spawn_pos.x,
@@ -331,7 +340,6 @@ pub fn main(init: std.process.Init) !void {
                 front.y * PROJECTILE_SPEED,
                 front.z * PROJECTILE_SPEED,
             ) catch {};
-
             fire_cooldown = FIRE_COOLDOWN;
         }
 
@@ -354,6 +362,8 @@ pub fn main(init: std.process.Init) !void {
 
         // Spin stays on CPU (purely visual, not physics)
         Zetal.systems.spinSystem(&world, time_sec);
+        Zetal.systems.spinSystem(&world, time_sec);
+        Zetal.systems.hitTimerSystem(&world, dt_sec); // NEW: decay hit flash
 
         // ── GPU COMPUTE PHYSICS ──────────────────────────────
         compute_phys.uploadToGPU(&world);

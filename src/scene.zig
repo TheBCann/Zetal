@@ -124,6 +124,24 @@ pub fn spawnProjectile(
     return e;
 }
 
+/// Spawn an enemy cube — static, has health, targetable by hitscan.
+pub fn spawnEnemy(world: *ecs.World, x: f32, y: f32, z: f32, hp: f32) !ecs.Entity {
+    const e = try world.spawn();
+
+    world.setTransform(e, .{ .x = x, .y = y, .z = z });
+    world.setMeshRenderer(e, .{ .mesh_id = 0, .texture_id = 0 });
+    world.setCollider(e, .{
+        .half_x = 0.5,
+        .half_y = 0.5,
+        .half_z = 0.5,
+        .is_static = true,
+    });
+    world.setHealth(e, .{ .hp = hp, .max_hp = hp });
+    world.setEnemyTag(e);
+
+    return e;
+}
+
 // ============================================================
 // FPS SCENE — Target walls + scattered cubes to shoot at
 // ============================================================
@@ -182,11 +200,11 @@ pub fn spawnFPSScene(world: *ecs.World) !void {
         }
     }
 
-    // --- Scattered elevated targets ---
-    _ = try spawnStaticCube(world, -4.0, -6.0, -18.0);
-    _ = try spawnStaticCube(world, 3.0, -5.0, -14.0);
-    _ = try spawnStaticCube(world, -2.0, -4.0, -10.0);
-    _ = try spawnStaticCube(world, 6.0, -7.0, -22.0);
+    // --- Scattered elevated ENEMIES (hitscan targets) ---
+    _ = try spawnEnemy(world, -4.0, -6.0, -18.0, 100);
+    _ = try spawnEnemy(world, 3.0, -5.0, -14.0, 100);
+    _ = try spawnEnemy(world, -2.0, -4.0, -10.0, 50);
+    _ = try spawnEnemy(world, 6.0, -7.0, -22.0, 150);
 }
 
 /// Legacy: Populate a field of cubes: 70% static spiral + 30% dynamic.

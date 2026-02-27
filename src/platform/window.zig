@@ -88,12 +88,14 @@ pub const App = struct {
                 const code = code_msg(event, code_sel);
                 if (code < 256) self.keys[code] = true;
                 if (code == 0x35) self.running = false;
+                continue;
             } else if (evt_type == 11) { // KeyUp
                 const code_sel = objc.getSelector("keyCode");
                 const CodeFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) u16;
                 const code_msg: CodeFn = @ptrCast(&objc.objc_msgSend);
                 const code = code_msg(event, code_sel);
                 if (code < 256) self.keys[code] = false;
+                continue;
             } else if (evt_type == 5) { // MouseMoved
                 const dx_sel = objc.getSelector("deltaX");
                 const dy_sel = objc.getSelector("deltaY");
