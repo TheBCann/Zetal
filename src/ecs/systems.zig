@@ -114,7 +114,12 @@ pub fn collisionSystem(world: *ecs.World) void {
 
 // ============================================================
 // GPU COLLISION RESPONSE — Resolves pairs from compute broad phase
+// Now with IMPACT CONVERSION: fast dynamic hitting static → static
+// becomes dynamic and receives impulse (knockdown physics).
 // ============================================================
+
+const IMPACT_SPEED_THRESHOLD: f32 = 8.0; // Min speed to knock a static cube loose
+const IMPACT_IMPULSE_SCALE: f32 = 0.6; // How much of projectile velocity transfers
 
 pub fn resolveCollisionPairs(
     world: *ecs.World,
@@ -165,24 +170,80 @@ pub fn resolveCollisionPairs(
                 world.velocities[i].z *= -restitution;
                 world.velocities[j].z *= -restitution;
             }
-        } else if (!a_static) {
+        } else if (!a_static and b_static) {
             // A is dynamic, B is static
-            world.transforms[i].x += push_x;
-            world.transforms[i].y += push_y;
-            world.transforms[i].z += push_z;
+            // Check if A is fast enough to knock B loose
+            const speed_sq = world.velocities[i].x * world.velocities[i].x +
+                world.velocities[i].y * world.velocities[i].y +
+                world.velocities[i].z * world.velocities[i].z;
 
-            if (push_x != 0) world.velocities[i].x *= -restitution;
-            if (push_y != 0) world.velocities[i].y *= -restitution;
-            if (push_z != 0) world.velocities[i].z *= -restitution;
-        } else if (!b_static) {
-            // B is dynamic, A is static
-            world.transforms[j].x -= push_x;
-            world.transforms[j].y -= push_y;
-            world.transforms[j].z -= push_z;
+            if (speed_sq > IMPACT_SPEED_THRESHOLD * IMPACT_SPEED_THRESHOLD) {
+                // === IMPACT: Convert B from static to dynamic ===
+                world.colliders[j].is_static = false;
 
-            if (push_x != 0) world.velocities[j].x *= -restitution;
-            if (push_y != 0) world.velocities[j].y *= -restitution;
-            if (push_z != 0) world.velocities[j].z *= -restitution;
+                // Transfer momentum: B gets fraction of A's velocity
+                world.velocities[j].x = world.velocities[i].x * IMPACT_IMPULSE_SCALE;
+                world.velocities[j].y = world.velocities[i].y * IMPACT_IMPULSE_SCALE + 3.0; // Pop upward
+                world.velocities[j].z = world.velocities[i].z * IMPACT_IMPULSE_SCALE;
+
+                // Add velocity mask to B so physics picks it up
+                world.masks[j] |= ecs.mask(&.{.velocity});
+
+                // Remove spin from the now-dynamic cube (looks weird spinning mid-air)
+                world.masks[j] &= ~ecs.mask(&.{.spin});
+
+                // Dampen projectile
+                world.velocities[i].x *= -restitution * 0.3;
+                world.velocities[i].y *= -restitution * 0.3;
+                world.velocities[i].z *= -restitution * 0.3;
+
+                // Push A out of B
+                world.transforms[i].x += push_x;
+                world.transforms[i].y += push_y;
+                world.transforms[i].z += push_z;
+            } else {
+                // Normal bounce off static
+                world.transforms[i].x += push_x;
+                world.transforms[i].y += push_y;
+                world.transforms[i].z += push_z;
+
+                if (push_x != 0) world.velocities[i].x *= -restitution;
+                if (push_y != 0) world.velocities[i].y *= -restitution;
+                if (push_z != 0) world.velocities[i].z *= -restitution;
+            }
+        } else if (a_static and !b_static) {
+            // A is static, B is dynamic — mirror of above
+            const speed_sq = world.velocities[j].x * world.velocities[j].x +
+                world.velocities[j].y * world.velocities[j].y +
+                world.velocities[j].z * world.velocities[j].z;
+
+            if (speed_sq > IMPACT_SPEED_THRESHOLD * IMPACT_SPEED_THRESHOLD) {
+                // === IMPACT: Convert A from static to dynamic ===
+                world.colliders[i].is_static = false;
+
+                world.velocities[i].x = world.velocities[j].x * IMPACT_IMPULSE_SCALE;
+                world.velocities[i].y = world.velocities[j].y * IMPACT_IMPULSE_SCALE + 3.0;
+                world.velocities[i].z = world.velocities[j].z * IMPACT_IMPULSE_SCALE;
+
+                world.masks[i] |= ecs.mask(&.{.velocity});
+                world.masks[i] &= ~ecs.mask(&.{.spin});
+
+                world.velocities[j].x *= -restitution * 0.3;
+                world.velocities[j].y *= -restitution * 0.3;
+                world.velocities[j].z *= -restitution * 0.3;
+
+                world.transforms[j].x -= push_x;
+                world.transforms[j].y -= push_y;
+                world.transforms[j].z -= push_z;
+            } else {
+                world.transforms[j].x -= push_x;
+                world.transforms[j].y -= push_y;
+                world.transforms[j].z -= push_z;
+
+                if (push_x != 0) world.velocities[j].x *= -restitution;
+                if (push_y != 0) world.velocities[j].y *= -restitution;
+                if (push_z != 0) world.velocities[j].z *= -restitution;
+            }
         }
     }
 }
@@ -216,6 +277,31 @@ pub fn enforceFloor(world: *ecs.World, floor_y: f32, restitution: f32) void {
             }
         }
     }
+}
+
+// ============================================================
+// CLEANUP SYSTEM — Remove entities that fall below the world
+// ============================================================
+
+/// Despawn entities that fall too far below the ground.
+/// Zeroes their masks so they become invisible + non-interactive.
+/// Returns how many entities were cleaned up.
+pub fn cleanupFallen(world: *ecs.World, kill_y: f32) u32 {
+    var cleaned: u32 = 0;
+    for (0..world.count) |i| {
+        if (world.masks[i] == 0) continue; // Already dead
+        if (!ecs.hasMask(world.masks[i], velocity_mask)) continue;
+        if (world.colliders[i].is_static) continue;
+
+        if (world.transforms[i].y < kill_y) {
+            // Zero the mask — entity becomes a ghost (no render, no physics)
+            world.masks[i] = 0;
+            world.velocities[i] = .{ .x = 0, .y = 0, .z = 0 };
+            world.transforms[i].y = 9999; // Move far away
+            cleaned += 1;
+        }
+    }
+    return cleaned;
 }
 
 // ============================================================
@@ -295,9 +381,21 @@ pub fn buildInstanceBuffer(
 
         const t = &world.transforms[i];
 
-        // Build model matrix: rotate then translate
+        // Build model matrix: scale → rotate → translate
         const rot = math.Mat4x4.rotateY(t.rot_y);
         var model_mat = rot;
+
+        // Apply uniform scale (projectiles use scale = 0.5)
+        model_mat.columns[0][0] *= t.scale;
+        model_mat.columns[0][1] *= t.scale;
+        model_mat.columns[0][2] *= t.scale;
+        model_mat.columns[1][0] *= t.scale;
+        model_mat.columns[1][1] *= t.scale;
+        model_mat.columns[1][2] *= t.scale;
+        model_mat.columns[2][0] *= t.scale;
+        model_mat.columns[2][1] *= t.scale;
+        model_mat.columns[2][2] *= t.scale;
+
         model_mat.columns[3][0] = t.x;
         model_mat.columns[3][1] = t.y;
         model_mat.columns[3][2] = t.z;

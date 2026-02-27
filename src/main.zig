@@ -3,7 +3,6 @@ const Zetal = @import("Zetal");
 const Math = Zetal.render.math;
 const Vec3 = Math.Vec3;
 const Io = std.Io;
-const compute = Zetal.render.compute;
 
 fn simpleSleep(ns: u64) void {
     const seconds = ns / std.time.ns_per_s;
@@ -94,6 +93,14 @@ const skybox_verts = [36][4]f32{
     .{ -1, -1, 1, 1 }, .{ 1, -1, -1, 1 },  .{ 1, -1, 1, 1 },
 };
 
+// ============================================================
+// FPS GAMEPLAY CONSTANTS
+// ============================================================
+
+const PROJECTILE_SPEED: f32 = 40.0; // Cube launch velocity
+const FIRE_COOLDOWN: f32 = 0.15; // Seconds between shots
+const KILL_Y: f32 = -30.0; // Entities below this get despawned
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -102,7 +109,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (Compute Physics)...\n", .{});
+    try stdout.print("Starting Zetal Engine (FPS Mode)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
@@ -114,8 +121,9 @@ pub fn main(init: std.process.Init) !void {
 
     // --- ECS WORLD ---
     var world = Zetal.ecs.World.init();
-    try Zetal.scene.spawnCubeField(&world, 1000);
-    const instance_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
+    try Zetal.scene.spawnFPSScene(&world);
+
+    const initial_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
 
     // --- GPU COMPUTE PHYSICS ---
     var compute_phys = try Zetal.render.compute.ComputePhysics.init(
@@ -188,10 +196,11 @@ pub fn main(init: std.process.Init) !void {
     const index_buffer = core.device.createBuffer(@sizeOf(u32) * model.indices.len, .StorageModeShared).?;
     @memcpy(@as([*]u32, @ptrCast(@alignCast(index_buffer.contents())))[0..model.indices.len], model.indices);
 
-    // Instance buffers
-    const mvp_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * instance_count, .StorageModeShared).?;
-    const model_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * instance_count, .StorageModeShared).?;
-    const shadow_mvp_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * instance_count, .StorageModeShared).?;
+    // Instance buffers — sized for MAX_ENTITIES since projectiles spawn at runtime
+    const max_instances: u32 = Zetal.ecs.world.MAX_ENTITIES;
+    const mvp_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * max_instances, .StorageModeShared).?;
+    const model_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * max_instances, .StorageModeShared).?;
+    const shadow_mvp_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * max_instances, .StorageModeShared).?;
 
     // --- GROUND PLANE ---
     const ground_size: f32 = 50.0;
@@ -213,21 +222,20 @@ pub fn main(init: std.process.Init) !void {
     const sky_vbuf = core.device.createBuffer(@sizeOf([4]f32) * 36, .StorageModeShared).?;
     @memcpy(@as([*][4]f32, @ptrCast(@alignCast(sky_vbuf.contents())))[0..36], &skybox_verts);
 
-    try stdout.print("Engine Ready. {d} cubes ({d} static + {d} dynamic) + ground + skybox.\n", .{
-        instance_count,
-        instance_count * 7 / 10,
-        instance_count - instance_count * 7 / 10,
-    });
-    try stdout.print("GPU Compute Physics: velocity integration + AABB + broad phase\n", .{});
+    try stdout.print("FPS Mode Ready. {d} target cubes. Left-click to fire!\n", .{initial_count});
+    try stdout.print("GPU Compute Physics: spatial hash grid + impact conversion\n", .{});
     try stdout.flush();
 
     // --- CAMERA STATE ---
-    var cam_pos = Vec3.init(0, 0, 5);
+    var cam_pos = Vec3.init(0, -8, 5);
     var cam_yaw: f32 = -90.0;
     var cam_pitch: f32 = 0.0;
     const move_speed: f32 = 5.0;
     const mouse_sensitivity: f32 = 0.1;
     const cam_radius: f32 = 0.3;
+
+    // --- FPS STATE ---
+    var fire_cooldown: f32 = 0.0;
 
     const start_time = Io.Clock.Timestamp.now(io, .awake);
     var last_time = start_time;
@@ -274,6 +282,33 @@ pub fn main(init: std.process.Init) !void {
         const resolved = Zetal.systems.resolveCamera(&world, cam_pos.x, cam_pos.y, cam_pos.z, cam_radius);
         cam_pos = Vec3.init(resolved.x, resolved.y, resolved.z);
 
+        // ═══════════════════════════════════════════
+        // FPS FIRE — Left click or Space to shoot
+        // ═══════════════════════════════════════════
+        fire_cooldown -= dt_sec;
+        if (fire_cooldown < 0) fire_cooldown = 0;
+
+        const want_fire = core.app.mouse_left_pressed or
+            (core.app.isPressed(.Space) and fire_cooldown <= 0);
+
+        if (want_fire and fire_cooldown <= 0) {
+            // Spawn projectile slightly in front of camera
+            const spawn_offset = 1.0;
+            const spawn_pos = Vec3.add(cam_pos, Vec3.scale(front, spawn_offset));
+
+            _ = Zetal.scene.spawnProjectile(
+                &world,
+                spawn_pos.x,
+                spawn_pos.y,
+                spawn_pos.z,
+                front.x * PROJECTILE_SPEED,
+                front.y * PROJECTILE_SPEED,
+                front.z * PROJECTILE_SPEED,
+            ) catch {};
+
+            fire_cooldown = FIRE_COOLDOWN;
+        }
+
         // View-Projection
         const center = Vec3.add(cam_pos, front);
         const view_mat = Math.Mat4x4.lookAt(cam_pos, center, cam_up);
@@ -295,14 +330,6 @@ pub fn main(init: std.process.Init) !void {
         Zetal.systems.spinSystem(&world, time_sec);
 
         // ── GPU COMPUTE PHYSICS ──────────────────────────────
-        // 1. Upload ECS state → GPU buffers
-        // 2. Dispatch 3 compute passes:
-        //      integrate_velocity (gravity + position)
-        //      compute_aabbs
-        //      broad_phase (collision pairs)
-        // 3. Download updated transforms + velocities
-        // 4. CPU resolves collision response (bounce)
-        // 5. Enforce floor constraint
         compute_phys.uploadToGPU(&world);
         compute_phys.dispatch(dt_sec, world.count);
         compute_phys.downloadToWorld(&world);
@@ -311,6 +338,9 @@ pub fn main(init: std.process.Init) !void {
         Zetal.systems.resolveCollisionPairs(&world, pairs, 0.5);
         Zetal.systems.enforceFloor(&world, ground_y, 0.6);
         // ─────────────────────────────────────────────────────
+
+        // Cleanup: despawn entities that fell below the world
+        _ = Zetal.systems.cleanupFallen(&world, KILL_Y);
 
         // Build instance buffers
         const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(mvp_buffer.contents())));

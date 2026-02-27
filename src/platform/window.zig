@@ -8,6 +8,8 @@ pub const App = struct {
     keys: [256]bool,
     mouse_dx: f32 = 0,
     mouse_dy: f32 = 0,
+    mouse_left: bool = false,
+    mouse_left_pressed: bool = false,
 
     pub const KeyCode = enum(u8) {
         A = 0x00,
@@ -16,6 +18,7 @@ pub const App = struct {
         W = 0x0D,
         Q = 0x0C,
         E = 0x0E,
+        Space = 0x31,
         Escape = 0x35,
     };
 
@@ -54,6 +57,7 @@ pub const App = struct {
     pub fn pollEvents(self: *App) void {
         self.mouse_dx = 0;
         self.mouse_dy = 0;
+        self.mouse_left_pressed = false;
 
         const next_sel = objc.getSelector("nextEventMatchingMask:untilDate:inMode:dequeue:");
         const NextFn = *const fn (?*anyopaque, ?*anyopaque, u64, ?*anyopaque, ?*anyopaque, bool) callconv(.c) ?*anyopaque;
@@ -98,6 +102,11 @@ pub const App = struct {
 
                 self.mouse_dx += @as(f32, @floatCast(delta_msg(event, dx_sel)));
                 self.mouse_dy += @as(f32, @floatCast(delta_msg(event, dy_sel)));
+            } else if (evt_type == 1) {
+                self.mouse_left = true;
+                self.mouse_left_pressed = true;
+            } else if (evt_type == 2) {
+                self.mouse_left = false;
             }
 
             const send_sel = objc.getSelector("sendEvent:");

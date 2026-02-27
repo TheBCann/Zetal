@@ -9,5 +9,5 @@ pub const Spin = world.Spin;
 pub const Velocity = world.Velocity;
 pub const MeshRenderer = world.MeshRenderer;
 pub const Collider = world.Collider;
-pub const ComponentFlags = world.ComponentFlags;
+pub const ComponentFlags = world.Component;
 pub const mask = world.mask;
