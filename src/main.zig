@@ -189,6 +189,32 @@ pub fn main(init: std.process.Init) !void {
     // Skybox: depth write OFF, compare LessEqual (skybox z = 1.0 = clear depth)
     const sky_depth_state = createSkyboxDepthState(core.device).?;
 
+    // --- CROSSHAIR PIPELINE ---
+    const ch = Zetal.render.crosshair;
+    const ch_lib = core.device.createLibrary(ch.crosshair_source).?;
+
+    const ch_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
+    ch_pipe_desc.setVertexFunction(ch_lib.getFunction("crosshair_vertex").?.handle);
+    ch_pipe_desc.setFragmentFunction(ch_lib.getFunction("crosshair_fragment").?.handle);
+    ch_pipe_desc.setColorAttachmentPixelFormat(0, 80);
+    ch_pipe_desc.setDepthAttachmentPixelFormat(252);
+    const ch_pipeline = core.device.createRenderPipelineState(ch_pipe_desc).?;
+
+    // Crosshair depth state: Always compare. no depth write (renders on top of everything)
+    const ch_depth_state = blk: {
+        const desc = Zetal.render.pipeline.MetalDepthStencilDescriptor.create().?;
+        desc.setDepthCompareFunction(.Always); // Always
+        desc.setDepthWriteEnabled(false);
+        break :blk core.device.createDepthStencilState(desc).?;
+    };
+
+    // Crosshair vertex buffer
+    const ch_vbuf = core.device.createBuffer(@sizeOf([4]f32) * ch.VERT_COUNT, .StorageModeShared).?;
+    @memcpy(
+        @as([*][4]f32, @ptrCast(@alignCast(ch_vbuf.contents())))[0..ch.VERT_COUNT],
+        &ch.vertices,
+    );
+
     // --- CUBE BUFFERS ---
     const Vertex = Zetal.render.vertex.Vertex;
     const vertex_buffer = core.device.createBuffer(@sizeOf(Vertex) * model.vertices.len, .StorageModeShared).?;
@@ -436,6 +462,13 @@ pub fn main(init: std.process.Init) !void {
             frame.enc.setVertexBytes(@ptrCast(&ground_model), @sizeOf(Math.Mat4x4), 3);
             frame.enc.setVertexBytes(@ptrCast(&light_vp), @sizeOf(Math.Mat4x4), 4);
             frame.enc.drawIndexedPrimitives(.Triangle, ground_indices.len, .UInt32, ground_ibuf.handle, 0);
+
+            // --- CROSSHAIR (last - no depth test, always on top) ---
+            frame.enc.setDepthStencilState(ch_depth_state.handle);
+            frame.enc.setRenderPipelineState(ch_pipeline.handle);
+            frame.enc.setVertexBuffer(ch_vbuf.handle, 0, 0);
+            frame.enc.setVertexBytes(@ptrCast(&aspect), @sizeOf(f32), 1);
+            frame.enc.drawPrimitives(.Triangle, 0, ch.VERT_COUNT);
 
             frame.submit();
         }

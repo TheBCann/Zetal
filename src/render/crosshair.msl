@@ -1,0 +1,22 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct CrosshairOut {
+    float4 position [[position]];
+};
+
+vertex CrosshairOut crosshair_vertex(
+    const device float4* positions [[buffer(0)]],
+    constant float& aspect [[buffer(1)]],
+    uint vid [[vertex_id]]
+) {
+    CrosshairOut out;
+    float4 pos = positions[vid];
+    pos.x /= aspect;
+    out.position = pos;
+    return out;
+}
+
+fragment float4 crosshair_fragment(CrosshairOut in [[stage_in]]) {
+    return float4(1.0, 1.0, 1.0, 1.0);
+}

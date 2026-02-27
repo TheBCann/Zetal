@@ -29,3 +29,4 @@ pub const MTLRegion = device.MTLRegion;
 pub const MTLOrigin = device.MTLOrigin;
 pub const MTLSize = device.MTLSize;
 pub const MTLResourceOptions = device.MTLResourceOptions;
+pub const crosshair = @import("crosshair.zig");
