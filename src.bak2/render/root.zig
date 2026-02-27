@@ -6,7 +6,6 @@ pub const shader = @import("shader.zig");
 pub const math = @import("math.zig");
 pub const device = @import("device.zig");
 pub const skybox = @import("skybox.zig");
-pub const compute = @import("compute.zig");
 
 // Re-export common types
 pub const MTLClearColor = types.MTLClearColor;

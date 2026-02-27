@@ -3,7 +3,6 @@ const Zetal = @import("Zetal");
 const Math = Zetal.render.math;
 const Vec3 = Math.Vec3;
 const Io = std.Io;
-const compute = Zetal.render.compute;
 
 fn simpleSleep(ns: u64) void {
     const seconds = ns / std.time.ns_per_s;

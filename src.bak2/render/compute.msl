@@ -1,0 +1,160 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// ============================================================
+// GPU-Compatible Structs (must match Zig extern structs exactly)
+// ============================================================
+
+struct GPUTransform {
+    float x, y, z, scale;
+    float rot_x, rot_y, rot_z, _pad;
+};
+
+struct GPUVelocity {
+    float x, y, z, _pad;
+};
+
+struct GPUCollider {
+    float half_x, half_y, half_z;
+    uint is_static;  // 0 = dynamic, 1 = static
+};
+
+struct GPUAABB {
+    float min_x, min_y, min_z, _pad0;
+    float max_x, max_y, max_z, _pad1;
+};
+
+struct CollisionPair {
+    uint a, b;
+    float pen_x, pen_y, pen_z;
+    float _pad;
+};
+
+struct PhysicsParams {
+    float dt;
+    float gravity;
+    uint entity_count;
+    uint _pad;
+};
+
+// Component mask bits:
+//   transform = bit 0 (0x01)
+//   spin      = bit 1 (0x02)
+//   mesh      = bit 2 (0x04)
+//   velocity  = bit 3 (0x08)
+//   collider  = bit 4 (0x10)
+
+// ============================================================
+// Kernel 1: Velocity Integration (includes gravity for dynamics)
+// ============================================================
+// Requires: transform (0x01) + velocity (0x08) = 0x09
+
+kernel void integrate_velocity(
+    device GPUTransform*       transforms [[buffer(0)]],
+    device GPUVelocity*        velocities [[buffer(1)]],
+    device const GPUCollider*  colliders  [[buffer(2)]],
+    device const uint*         masks      [[buffer(3)]],
+    constant PhysicsParams&    params     [[buffer(4)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= params.entity_count) return;
+
+    uint m = masks[id];
+    if ((m & 0x09) != 0x09) return;  // need transform + velocity
+
+    // Apply gravity if entity has collider and is non-static
+    if ((m & 0x10) != 0 && colliders[id].is_static == 0) {
+        velocities[id].y += params.gravity * params.dt;
+    }
+
+    // Integrate position
+    transforms[id].x += velocities[id].x * params.dt;
+    transforms[id].y += velocities[id].y * params.dt;
+    transforms[id].z += velocities[id].z * params.dt;
+}
+
+// ============================================================
+// Kernel 2: Compute AABBs from Transforms + Colliders
+// ============================================================
+// Requires: transform (0x01) + collider (0x10) = 0x11
+
+kernel void compute_aabbs(
+    device const GPUTransform* transforms [[buffer(0)]],
+    device const GPUCollider*  colliders  [[buffer(1)]],
+    device const uint*         masks      [[buffer(2)]],
+    device GPUAABB*            aabbs      [[buffer(3)]],
+    constant PhysicsParams&    params     [[buffer(4)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= params.entity_count) return;
+
+    if ((masks[id] & 0x11) != 0x11) {
+        // Degenerate AABB — will never overlap
+        aabbs[id].min_x =  1e9;  aabbs[id].min_y =  1e9;  aabbs[id].min_z =  1e9;
+        aabbs[id].max_x = -1e9;  aabbs[id].max_y = -1e9;  aabbs[id].max_z = -1e9;
+        return;
+    }
+
+    float3 pos  = float3(transforms[id].x, transforms[id].y, transforms[id].z);
+    float3 half = float3(colliders[id].half_x, colliders[id].half_y, colliders[id].half_z);
+
+    aabbs[id].min_x = pos.x - half.x;
+    aabbs[id].min_y = pos.y - half.y;
+    aabbs[id].min_z = pos.z - half.z;
+    aabbs[id].max_x = pos.x + half.x;
+    aabbs[id].max_y = pos.y + half.y;
+    aabbs[id].max_z = pos.z + half.z;
+}
+
+// ============================================================
+// Kernel 3: Broad Phase Collision Detection
+// ============================================================
+// Each thread handles entity[id] vs all entities with index > id.
+// Outputs collision pairs with penetration depths.
+// Skips pairs where both entities are static.
+
+kernel void broad_phase(
+    device const GPUAABB*      aabbs      [[buffer(0)]],
+    device const uint*         masks      [[buffer(1)]],
+    device const GPUCollider*  colliders  [[buffer(2)]],
+    device CollisionPair*      pairs      [[buffer(3)]],
+    device atomic_uint*        pair_count [[buffer(4)]],
+    constant PhysicsParams&    params     [[buffer(5)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= params.entity_count) return;
+    if ((masks[id] & 0x11) != 0x11) return;
+
+    GPUAABB a = aabbs[id];
+
+    for (uint j = id + 1; j < params.entity_count; j++) {
+        if ((masks[j] & 0x11) != 0x11) continue;
+
+        // Both static → no response needed
+        if (colliders[id].is_static != 0 && colliders[j].is_static != 0) continue;
+
+        GPUAABB b = aabbs[j];
+
+        // Separating axis test
+        if (a.min_x > b.max_x || a.max_x < b.min_x) continue;
+        if (a.min_y > b.max_y || a.max_y < b.min_y) continue;
+        if (a.min_z > b.max_z || a.max_z < b.min_z) continue;
+
+        // Penetration depth per axis
+        float px = min(a.max_x, b.max_x) - max(a.min_x, b.min_x);
+        float py = min(a.max_y, b.max_y) - max(a.min_y, b.min_y);
+        float pz = min(a.max_z, b.max_z) - max(a.min_z, b.min_z);
+
+        if (px <= 0 || py <= 0 || pz <= 0) continue;
+
+        uint idx = atomic_fetch_add_explicit(pair_count, 1, memory_order_relaxed);
+        if (idx < 4096) {
+            pairs[idx].a     = id;
+            pairs[idx].b     = j;
+            pairs[idx].pen_x = px;
+            pairs[idx].pen_y = py;
+            pairs[idx].pen_z = pz;
+        }
+    }
+}
+

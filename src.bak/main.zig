@@ -3,7 +3,6 @@ const Zetal = @import("Zetal");
 const Math = Zetal.render.math;
 const Vec3 = Math.Vec3;
 const Io = std.Io;
-const compute = Zetal.render.compute;
 
 fn simpleSleep(ns: u64) void {
     const seconds = ns / std.time.ns_per_s;
@@ -102,7 +101,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer_impl = Io.File.Writer.init(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer_impl.interface;
 
-    try stdout.print("Starting Zetal Engine (Compute Physics)...\n", .{});
+    try stdout.print("Starting Zetal Engine (Skybox + Shadows)...\n", .{});
     try stdout.flush();
 
     var core = try Zetal.engine.Core.init();
@@ -116,13 +115,6 @@ pub fn main(init: std.process.Init) !void {
     var world = Zetal.ecs.World.init();
     try Zetal.scene.spawnCubeField(&world, 100);
     const instance_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
-
-    // --- GPU COMPUTE PHYSICS ---
-    var compute_phys = try Zetal.render.compute.ComputePhysics.init(
-        core.device,
-        core.queue,
-        Zetal.ecs.world.MAX_ENTITIES,
-    );
 
     // Upload Texture
     const texture = core.device.createTexture(ppm.width, ppm.height, 70).?;
@@ -213,12 +205,7 @@ pub fn main(init: std.process.Init) !void {
     const sky_vbuf = core.device.createBuffer(@sizeOf([4]f32) * 36, .StorageModeShared).?;
     @memcpy(@as([*][4]f32, @ptrCast(@alignCast(sky_vbuf.contents())))[0..36], &skybox_verts);
 
-    try stdout.print("Engine Ready. {d} cubes ({d} static + {d} dynamic) + ground + skybox.\n", .{
-        instance_count,
-        instance_count * 7 / 10,
-        instance_count - instance_count * 7 / 10,
-    });
-    try stdout.print("GPU Compute Physics: velocity integration + AABB + broad phase\n", .{});
+    try stdout.print("Engine Ready. {d} cubes + ground + skybox.\n", .{instance_count});
     try stdout.flush();
 
     // --- CAMERA STATE ---
@@ -229,11 +216,11 @@ pub fn main(init: std.process.Init) !void {
     const mouse_sensitivity: f32 = 0.1;
     const cam_radius: f32 = 0.3;
 
-    const start_time = Io.Clock.Timestamp.now(io, .awake);
+    const start_time = try Io.Clock.Timestamp.now(io, .awake);
     var last_time = start_time;
 
     while (true) {
-        const now = Io.Clock.Timestamp.now(io, .awake);
+        const now = try Io.Clock.Timestamp.now(io, .awake);
         const frame_dt = last_time.durationTo(now);
         last_time = now;
         const dt_sec = @as(f32, @floatFromInt(frame_dt.raw.toMilliseconds())) / 1000.0;
@@ -291,26 +278,9 @@ pub fn main(init: std.process.Init) !void {
         const total_elapsed = start_time.durationTo(now).raw.toMilliseconds();
         const time_sec = @as(f32, @floatFromInt(total_elapsed)) / 1000.0;
 
-        // Spin stays on CPU (purely visual, not physics)
         Zetal.systems.spinSystem(&world, time_sec);
-
-        // ── GPU COMPUTE PHYSICS ──────────────────────────────
-        // 1. Upload ECS state → GPU buffers
-        // 2. Dispatch 3 compute passes:
-        //      integrate_velocity (gravity + position)
-        //      compute_aabbs
-        //      broad_phase (collision pairs)
-        // 3. Download updated transforms + velocities
-        // 4. CPU resolves collision response (bounce)
-        // 5. Enforce floor constraint
-        compute_phys.uploadToGPU(&world);
-        compute_phys.dispatch(dt_sec, world.count);
-        compute_phys.downloadToWorld(&world);
-
-        const pairs = compute_phys.readPairs();
-        Zetal.systems.resolveCollisionPairs(&world, pairs, 0.5);
-        Zetal.systems.enforceFloor(&world, ground_y, 0.6);
-        // ─────────────────────────────────────────────────────
+        Zetal.systems.velocitySystem(&world, dt_sec);
+        Zetal.systems.collisionSystem(&world);
 
         // Build instance buffers
         const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(mvp_buffer.contents())));

@@ -1,2 +1,7 @@
 .zig-cache/
 zig-out/
+.envrc
+./deploy/
+./refactor.sh
+./src.bak/
+./src.bak2/

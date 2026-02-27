@@ -1,5 +1,5 @@
 const std = @import("std");
-const ecs = @import("ecs/world.zig");
+const ecs = @import("ecs.zig");
 
 // ============================================================
 // SIMPLE SCENE (Array-based, kept for backward compat)
@@ -35,7 +35,7 @@ pub const Scene = struct {
 // ECS HELPERS
 // ============================================================
 
-/// Spawn a spinning renderable cube with collision (static).
+/// Spawn a spinning renderable cube with collision at the given position.
 pub fn spawnCube(world: *ecs.World, x: f32, y: f32, z: f32, spin_offset: f32) !ecs.Entity {
     const e = try world.spawn();
 
@@ -65,30 +65,10 @@ pub fn spawnCube(world: *ecs.World, x: f32, y: f32, z: f32, spin_offset: f32) !e
     return e;
 }
 
-/// Spawn a dynamic cube — has velocity (starts at zero), affected by gravity.
-pub fn spawnDynamicCube(world: *ecs.World, x: f32, y: f32, z: f32) !ecs.Entity {
-    const e = try world.spawn();
-
-    world.setTransform(e, .{ .x = x, .y = y, .z = z });
-    world.setMeshRenderer(e, .{ .mesh_id = 0, .texture_id = 0 });
-    world.setVelocity(e, .{ .x = 0, .y = 0, .z = 0 }); // gravity pulls down
-    world.setCollider(e, .{
-        .half_x = 0.5,
-        .half_y = 0.5,
-        .half_z = 0.5,
-        .is_static = false,
-    });
-
-    return e;
-}
-
-/// Populate a field of cubes: 70% static spiral + 30% dynamic falling from above.
+/// Populate a field of spinning cubes.
 pub fn spawnCubeField(world: *ecs.World, count: usize) !void {
-    const static_count = count * 7 / 10;
-
-    // --- Static spinning cubes in a spiral ---
     var i: usize = 0;
-    while (i < static_count) : (i += 1) {
+    while (i < count) : (i += 1) {
         const fi = @as(f32, @floatFromInt(i));
         const angle = fi * 0.5;
         const radius = 2.0 + (fi * 0.1);
@@ -97,14 +77,5 @@ pub fn spawnCubeField(world: *ecs.World, count: usize) !void {
         const z = @sin(angle) * radius - 10.0;
         const spin_offset = fi * 0.05;
         _ = try spawnCube(world, x, y, z, spin_offset);
-    }
-
-    // --- Dynamic cubes scattered above, will fall with gravity ---
-    while (i < count) : (i += 1) {
-        const fi = @as(f32, @floatFromInt(i - static_count));
-        const x = @cos(fi * 1.7) * 4.0;
-        const y = 5.0 + fi * 1.5; // staggered heights so they don't all land at once
-        const z = @sin(fi * 1.3) * 4.0 - 10.0;
-        _ = try spawnDynamicCube(world, x, y, z);
     }
 }
