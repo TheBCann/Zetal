@@ -129,7 +129,7 @@ pub const Mat4x4 = struct {
 /// Returns the distance `t` along the ray to the nearest hit, or null if miss.
 /// `dir` must be normalized.
 pub fn rayIntersectAABB(origin: Vec3, dir: Vec3, box_min: Vec3, box_max: Vec3) ?f32 {
-    var tmin: f32 = std.math.inf(f32);
+    var tmin: f32 = -std.math.inf(f32);
     var tmax: f32 = std.math.inf(f32);
 
     // X slab
@@ -137,7 +137,7 @@ pub fn rayIntersectAABB(origin: Vec3, dir: Vec3, box_min: Vec3, box_max: Vec3) ?
         const t1 = (box_min.x - origin.x) / dir.x;
         const t2 = (box_max.x - origin.x) / dir.x;
         tmin = @max(tmin, @min(t1, t2));
-        tmax = @max(tmax, @min(t1, t2));
+        tmax = @min(tmax, @max(t1, t2));
     } else if (origin.x < box_min.x or origin.x > box_max.x) {
         return null;
     }

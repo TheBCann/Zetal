@@ -15,6 +15,7 @@ struct VertexOut {
     float3 normal;
     float3 worldPos;
     float4 lightSpacePos;
+    float hitTimer;
 };
 
 struct LightUniforms {
@@ -127,7 +128,8 @@ vertex VertexOut vertex_main(
     constant Vertex *vertices [[buffer(0)]],
     constant float4x4 *mvps [[buffer(1)]],
     constant float4x4 *models [[buffer(3)]],
-    constant float4x4 &lightVP [[buffer(4)]]
+    constant float4x4 &lightVP [[buffer(4)]],
+    constant float *hitTimers [[buffer(5)]]
 ) {
     VertexOut out;
     float4x4 mvp = mvps[instanceID];
@@ -144,6 +146,7 @@ vertex VertexOut vertex_main(
 
     out.color = vertices[vertexID].color;
     out.uv = vertices[vertexID].uv.xy;
+    out.hitTimer = hitTimers[instanceID];
     return out;
 }
 
@@ -171,6 +174,7 @@ vertex VertexOut vertex_single(
 
     out.color = vertices[vertexID].color;
     out.uv = vertices[vertexID].uv.xy;
+    out.hitTimer = 0.0;
     return out;
 }
 
@@ -229,5 +233,12 @@ fragment float4 fragment_main(
     float shadow = shadowCalc(in.lightSpacePos, shadowMap);
 
     float3 result = (ambient + (1.0 - shadow) * (diffuse + specular)) * in.color.rgb * texColor.rgb;
+
+    // Hit flash: blend toward bright red when hit_timer > 0
+    if (in.hitTimer > 0.0) {
+      float3 flashColor = float3(1.0, 0.2, 0.2);
+      result = mix(result, flashColor, in.hitTimer * 0.7);
+    }
+
     return float4(result, 1.0);
 }

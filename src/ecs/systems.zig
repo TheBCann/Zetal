@@ -15,7 +15,7 @@ pub fn hitscanSystem(
     world: *ecs.World,
     origin: math.Vec3,
     dir: math.Vec3,
-    damamge: f32,
+    damage: f32,
     max_range: f32,
 ) ?ecs.Entity {
     var closest_t: f32 = max_range;
@@ -40,7 +40,7 @@ pub fn hitscanSystem(
 
     if (hit_entity) |e| {
         const hp = &world.healths[e];
-        hp.hp -= damamge;
+        hp.hp -= damage;
         hp.hit_timer = 1.0; // Flash for ~0.2s (decayed by hitTimerSystem)
 
         // enemy killed - convert to dynamic ragdoll
@@ -48,7 +48,7 @@ pub fn hitscanSystem(
             hp.hp = 0;
 
             // Give it velocity so it tumbles
-            world.colliders[0].is_static = false;
+            world.colliders[e].is_static = false;
             world.masks[e] |= ecs.mask(&.{.velocity});
             world.masks[e] &= ~ecs.mask(&.{.enemy_tag}); // No longer targetable
 
@@ -203,7 +203,8 @@ pub fn resolveCollisionPairs(
     world: *ecs.World,
     pairs: []const compute.CollisionPair,
     restitution: f32,
-) void {
+) bool {
+    var hit_target = false;
     for (pairs) |pair| {
         const i: usize = pair.a;
         const j: usize = pair.b;
@@ -256,6 +257,7 @@ pub fn resolveCollisionPairs(
                 world.velocities[i].z * world.velocities[i].z;
 
             if (speed_sq > IMPACT_SPEED_THRESHOLD * IMPACT_SPEED_THRESHOLD) {
+                hit_target = true;
                 // === IMPACT: Convert B from static to dynamic ===
                 world.colliders[j].is_static = false;
 
@@ -296,6 +298,7 @@ pub fn resolveCollisionPairs(
                 world.velocities[j].z * world.velocities[j].z;
 
             if (speed_sq > IMPACT_SPEED_THRESHOLD * IMPACT_SPEED_THRESHOLD) {
+                hit_target = true;
                 // === IMPACT: Convert A from static to dynamic ===
                 world.colliders[i].is_static = false;
 
@@ -324,6 +327,7 @@ pub fn resolveCollisionPairs(
             }
         }
     }
+    return hit_target;
 }
 
 // ============================================================
@@ -452,6 +456,7 @@ pub fn buildInstanceBuffer(
     view_proj: math.Mat4x4,
     gpu_mvps: [*]math.Mat4x4,
     gpu_models: [*]math.Mat4x4,
+    gpu_hit_timers: [*]f32, // NEW
 ) u32 {
     var n: u32 = 0;
     for (0..world.count) |i| {
@@ -463,7 +468,6 @@ pub fn buildInstanceBuffer(
         const rot = math.Mat4x4.rotateY(t.rot_y);
         var model_mat = rot;
 
-        // Apply uniform scale (projectiles use scale = 0.5)
         model_mat.columns[0][0] *= t.scale;
         model_mat.columns[0][1] *= t.scale;
         model_mat.columns[0][2] *= t.scale;
@@ -480,6 +484,13 @@ pub fn buildInstanceBuffer(
 
         gpu_models[n] = model_mat;
         gpu_mvps[n] = math.Mat4x4.mul(view_proj, model_mat);
+
+        // Hit timer: 0 if entity has no health component
+        gpu_hit_timers[n] = if (ecs.hasMask(world.masks[i], health_mask))
+            world.healths[i].hit_timer
+        else
+            0.0;
+
         n += 1;
     }
     return n;

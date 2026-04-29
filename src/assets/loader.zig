@@ -5,7 +5,7 @@ const Vertex = render.vertex.Vertex;
 
 pub const Mesh = struct {
     vertices: []Vertex,
-    indices: []u32, // NEW: The list of indices
+    indices: []u32,
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: Mesh) void {

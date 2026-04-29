@@ -30,8 +30,8 @@ pub const vertex_count: u64 = 36;
 /// depth write OFF, compare LessEqual (skybox z = 1.0 = clear depth).
 pub fn createDepthState(dev: device.MetalDevice) ?pipeline.MetalDepthStencilState {
     const desc_class = objc.objc_getClass("MTLDepthStencilDescriptor");
-    const alloc_sel = objc.getSelector("alloc");
-    const init_sel = objc.getSelector("init");
+    const alloc_sel = objc.sel("alloc");
+    const init_sel = objc.sel("init");
 
     const AllocFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
     const alloc_msg: AllocFn = @ptrCast(&objc.objc_msgSend);
@@ -41,17 +41,17 @@ pub fn createDepthState(dev: device.MetalDevice) ?pipeline.MetalDepthStencilStat
     const init_msg: InitFn = @ptrCast(&objc.objc_msgSend);
     desc = init_msg(desc, init_sel);
 
-    const cmp_sel = objc.getSelector("setDepthCompareFunction:");
+    const cmp_sel = objc.sel("setDepthCompareFunction:");
     const CmpFn = *const fn (?*anyopaque, ?*anyopaque, u64) callconv(.c) void;
     const cmp_msg: CmpFn = @ptrCast(&objc.objc_msgSend);
     cmp_msg(desc, cmp_sel, 3); // LessEqual
 
-    const write_sel = objc.getSelector("setDepthWriteEnabled:");
+    const write_sel = objc.sel("setDepthWriteEnabled:");
     const WriteFn = *const fn (?*anyopaque, ?*anyopaque, bool) callconv(.c) void;
     const write_msg: WriteFn = @ptrCast(&objc.objc_msgSend);
     write_msg(desc, write_sel, false);
 
-    const new_sel = objc.getSelector("newDepthStencilStateWithDescriptor:");
+    const new_sel = objc.sel("newDepthStencilStateWithDescriptor:");
     const NewFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?objc.Object;
     const new_msg: NewFn = @ptrCast(&objc.objc_msgSend);
     if (new_msg(dev.handle, new_sel, desc)) |s| return pipeline.MetalDepthStencilState{ .handle = s };

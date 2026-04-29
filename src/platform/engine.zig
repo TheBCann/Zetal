@@ -50,7 +50,7 @@ pub const Core = struct {
     }
 
     fn getDrawableSize(view: window.MetalView) CGSize {
-        const size_sel = objc.getSelector("drawableSize");
+        const size_sel = objc.sel("drawableSize");
         const SizeFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) CGSize;
         const size_msg: SizeFn = @ptrCast(&objc.objc_msgSend);
         return size_msg(view.handle, size_sel);
@@ -97,13 +97,13 @@ pub const Core = struct {
         const pass = render.MetalRenderPassDescriptor.create() orelse return null;
 
         // Depth-only: no color attachment, just depth (Store so main pass can sample it)
-        pass.setDepthAttachmentWithStore(self.shadow_map.handle, 1.0, 1); // 1 = Store
+        pass.setDepthAttachmentWithStore(self.shadow_map.handle, 1.0, .store_and_multisample_resolve); // 1 = Store
 
         const cmd_buffer = self.queue.createCommandBuffer() orelse return null;
         const encoder = cmd_buffer.createRenderCommandEncoder(pass) orelse return null;
 
         // Set cull mode to front face to reduce shadow acne
-        const cull_sel = objc.getSelector("setCullMode:");
+        const cull_sel = objc.sel("setCullMode:");
         const CullFn = *const fn (?objc.Object, ?objc.Selector, u64) callconv(.c) void;
         const cull_msg: CullFn = @ptrCast(&objc.objc_msgSend);
         cull_msg(encoder.handle, cull_sel, 1); // MTLCullModeFront = 1
@@ -115,13 +115,13 @@ pub const Core = struct {
     pub fn beginFrame(self: Core, clear_color: render.MTLClearColor) ?Frame {
         const drawable = self.view.nextDrawable() orelse return null;
 
-        const tex_sel = objc.getSelector("texture");
+        const tex_sel = objc.sel("texture");
         const GetTexFn = *const fn (?objc.Object, ?objc.Selector) callconv(.c) ?objc.Object;
         const get_tex: GetTexFn = @ptrCast(&objc.objc_msgSend);
         const texture = get_tex(drawable, tex_sel) orelse return null;
 
         const pass = render.MetalRenderPassDescriptor.create() orelse return null;
-        pass.setColorAttachment(0, texture, .Clear, .Store, clear_color);
+        pass.setColorAttachment(0, texture, .clear, .store, clear_color);
         pass.setDepthAttachment(self.depth_texture, 1.0);
 
         const cmd_buffer = self.queue.createCommandBuffer() orelse return null;

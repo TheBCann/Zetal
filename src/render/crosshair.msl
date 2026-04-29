@@ -3,20 +3,44 @@ using namespace metal;
 
 struct CrosshairOut {
     float4 position [[position]];
+    float3 color;
 };
 
 vertex CrosshairOut crosshair_vertex(
     const device float4* positions [[buffer(0)]],
     constant float& aspect [[buffer(1)]],
+    constant float& hitMarker [[buffer(2)]],
     uint vid [[vertex_id]]
 ) {
     CrosshairOut out;
     float4 pos = positions[vid];
+
+    // Did the Zig vertex array tag this as a hitmarker?
+    bool isHitmarker = (pos.w > 1.5);
+    pos.w = 1.0; // Reset W so standard perspective rendering doesn't break
+
+    if (isHitmarker) {
+        // If the timer is dead, completely hide the hitmarker
+        if (hitMarker <= 0.0) {
+            pos.xy = float2(0.0);
+        } else {
+            // CS:GO style pop: expands slightly outward as it fades
+            float pop = 1.0 + (1.0 - hitMarker) * 0.5;
+            pos.xy *= pop;
+        }
+        out.color = float3(1.0); // White hitmarker
+    } else {
+        // Standard static crosshair (always visible)
+        out.color = float3(1.0); // White crosshair
+    }
+
     pos.x /= aspect;
     out.position = pos;
     return out;
 }
 
 fragment float4 crosshair_fragment(CrosshairOut in [[stage_in]]) {
-    return float4(1.0, 1.0, 1.0, 1.0);
+    // Return the color solid. The hitmarker snaps out of existence 
+    // cleanly when the timer hits zero.
+    return float4(in.color, 1.0); 
 }

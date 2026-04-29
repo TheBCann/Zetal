@@ -2,38 +2,91 @@ const std = @import("std");
 
 pub const Object = *anyopaque;
 pub const Selector = *anyopaque;
+pub const Class = *anyopaque;
 
 pub extern "c" fn sel_registerName(str: [*:0]const u8) ?Selector;
-pub extern "c" fn objc_getClass(name: [*]const u8) ?Object;
-pub extern "c" fn objc_msgSend(self: ?Object, op: ?Selector, ...) ?Object;
+pub extern "c" fn objc_getClass(name: [*:0]const u8) ?Class;
+pub extern "c" fn objc_msgSend() void;
+pub extern "c" fn object_getClass(obj: ?Object) ?Class;
 
-pub fn getSelector(name: [:0]const u8) ?Selector {
-    const sel = sel_registerName(name);
-    if (sel == null) {
-        std.debug.print("ERROR: Failed to register selector: {s}\n", .{name});
-    }
-    return sel;
+/// Comptime-cached selector. First call registers, subsequent calls are free.
+/// Each unique `name` gets its own static storage via comptime monomorphization.
+pub fn sel(comptime name: [:0]const u8) Selector {
+    return sel_registerName(name.ptr) orelse {
+        std.debug.panic("Failed to register selector: {s}", .{name});
+    };
 }
 
-// CHANGED: Uses robust factory method 'stringWithUTF8String:'
-// Requires [:0]const u8 (null-terminated slice)
-pub fn createNSString(content: [:0]const u8) ?Object {
-    const ns_string_class = objc_getClass("NSString");
-    if (ns_string_class == null) return null;
+pub fn class(comptime name: [:0]const u8) Class {
+    return objc_getClass(name.ptr) orelse {
+        std.debug.panic("Failed to look up class: {s}", .{name});
+    };
+}
 
-    const sel = getSelector("stringWithUTF8String:");
+/// Send an Objective-C message with comptime-typed signature.
+///
+/// `Ret`           - the return type of the message
+/// `target`        - receiver (Object or Class, optional or not)
+/// `selector_name` - the selector as a string literal (gets cached)
+/// `args`          - tuple of arguments after `self` and `_cmd`
+///
+/// Example:
+///   const tex = msgSend(?Object, descriptor, "texture", .{});
+///   msgSend(void, encoder, "setVertexBuffer:offset:atIndex:", .{ buf, 0, 1 });
+pub inline fn msgSend(
+    comptime Ret: type,
+    target: anytype,
+    comptime selector_name: [:0]const u8,
+    args: anytype,
+) Ret {
+    const Args = @TypeOf(args);
+    const args_info = @typeInfo(Args);
+    if (args_info != .@"struct" or !args_info.@"struct".is_tuple) {
+        @compileError("msgSend args must be a tuple, got " ++ @typeName(Args));
+    }
+    const Target = @TypeOf(target);
+    const FnType = BuildMsgSendFn(Ret, Target, Args);
+    const msg: FnType = @ptrCast(&objc_msgSend);
+    return @call(.auto, msg, .{ target, sel(selector_name) } ++ args);
+}
 
-    // Signature: (Class, SEL, const char*) -> NSString*
-    const FactoryFn = *const fn (?Object, ?Selector, [*:0]const u8) callconv(.c) ?Object;
-    const factory_msg: FactoryFn = @ptrCast(&objc_msgSend);
+fn BuildMsgSendFn(comptime Ret: type, comptime Target: type, comptime Args: type) type {
+    const args_fields = @typeInfo(Args).@"struct".fields;
+    const total_params = args_fields.len + 2;
 
-    const raw_string = factory_msg(ns_string_class, sel, content.ptr);
+    var param_types: [total_params]type = undefined;
+    var param_attrs: [total_params]std.builtin.Type.Fn.Param.Attributes = undefined;
 
-    if (raw_string == null) {
-        std.debug.print("ERROR: NSString.stringWithUTF8String returned nil for '{s}'\n", .{content});
+    param_types[0] = Target;
+    param_types[1] = Selector;
+    param_attrs[0] = .{};
+    param_attrs[1] = .{};
+
+    inline for (args_fields, 0..) |f, i| {
+        param_types[i + 2] = f.type;
+        param_attrs[i + 2] = .{};
     }
 
-    return raw_string;
+    const FnType = @Fn(
+        &param_types,
+        &param_attrs,
+        Ret,
+        .{ .@"callconv" = std.builtin.CallingConvention.c },
+    );
+    return *const FnType;
+}
+
+pub fn release(obj: ?Object) void {
+    if (obj) |o| msgSend(void, o, "release", .{});
+}
+
+pub fn retain(obj: ?Object) ?Object {
+    if (obj) |o| _ = msgSend(?Object, o, "retain", .{});
+    return obj;
+}
+
+pub fn createNSString(content: [:0]const u8) ?Object {
+    return msgSend(?Object, class("NSString"), "stringWithUTF8String:", .{content.ptr});
 }
 
 pub const CGRect = extern struct {
