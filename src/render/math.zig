@@ -89,13 +89,27 @@ pub const Mat4x4 = struct {
 
     pub fn perspective(fov_rad: f32, aspect: f32, near: f32, far: f32) Mat4x4 {
         const tan_half = @tan(fov_rad / 2.0);
-        var mat = Mat4x4{ .columns = .{ .{0} ** 4, .{0} ** 4, .{0} ** 4, .{0} ** 4 } };
+        var mat = Mat4x4{ .columns = @splat(@splat(0)) };
         mat.columns[0][0] = 1.0 / (aspect * tan_half);
         mat.columns[1][1] = 1.0 / tan_half;
         mat.columns[2][2] = -(far + near) / (far - near);
         mat.columns[2][3] = -1.0;
         mat.columns[3][2] = -(2.0 * far * near) / (far - near);
         return mat;
+    }
+
+    pub fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Mat4x4 {
+        const rl = right - left;
+        const tb = top - bottom;
+        const fn_ = far - near;
+        var m = identity();
+        m.columns[0][0] = 2.0 / rl;
+        m.columns[1][1] = 2.0 / tb;
+        m.columns[2][2] = -1.0 / fn_;
+        m.columns[3][0] = -(right + left) / rl;
+        m.columns[3][1] = -(top + bottom) / tb;
+        m.columns[3][2] = -near / fn_;
+        return m;
     }
 
     // NEW: LookAt Matrix (The standard FPS Camera tool)
@@ -147,7 +161,7 @@ pub fn rayIntersectAABB(origin: Vec3, dir: Vec3, box_min: Vec3, box_max: Vec3) ?
         const t1 = (box_min.y - origin.y) / dir.y;
         const t2 = (box_max.y - origin.y) / dir.y;
         tmin = @max(tmin, @min(t1, t2));
-        tmax = @max(tmax, @min(t1, t2));
+        tmax = @min(tmax, @max(t1, t2));
     } else if (origin.y < box_min.y or origin.y > box_max.y) {
         return null;
     }

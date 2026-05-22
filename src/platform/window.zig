@@ -76,7 +76,7 @@ pub const App = struct {
             .ns_app = shared_app.?,
             .default_run_loop = mode_str,
             .running = true,
-            .keys = .{false} ** 256,
+            .keys = @splat(false),
         };
     }
 

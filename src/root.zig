@@ -8,6 +8,11 @@ pub const render = @import("render/root.zig");
 pub const ecs = @import("ecs/root.zig");
 pub const assets = @import("assets/root.zig");
 pub const scene = @import("scene.zig");
+pub const player = @import("player.zig");
+
+pub const Player = player.Player;
+pub const Camera = player.Camera;
+pub const AutoreleasePool = platform.AutoreleasePool;
 
 // --- Convenience re-exports ---
 pub const engine = platform.engine;

@@ -7,6 +7,9 @@ pub const math = @import("math.zig");
 pub const device = @import("device.zig");
 pub const skybox = @import("skybox.zig");
 pub const compute = @import("compute.zig");
+pub const pipelines = @import("pipelines.zig");
+pub const buffers = @import("buffers.zig");
+pub const lighting = @import("lighting.zig");
 
 // Re-export common types
 pub const MTLClearColor = types.MTLClearColor;

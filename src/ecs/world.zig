@@ -125,15 +125,15 @@ pub const AABB = struct {
 
 pub const World = struct {
     count: u32 = 0,
-    masks: [MAX_ENTITIES]ComponentMask = .{0} ** MAX_ENTITIES,
+    masks: [MAX_ENTITIES]ComponentMask = @splat(0),
 
-    transforms: [MAX_ENTITIES]Transform = .{Transform{}} ** MAX_ENTITIES,
-    spins: [MAX_ENTITIES]Spin = .{Spin{}} ** MAX_ENTITIES,
-    mesh_renderers: [MAX_ENTITIES]MeshRenderer = .{MeshRenderer{}} ** MAX_ENTITIES,
-    velocities: [MAX_ENTITIES]Velocity = .{Velocity{}} ** MAX_ENTITIES,
-    colliders: [MAX_ENTITIES]Collider = .{Collider{}} ** MAX_ENTITIES,
-    healths: [MAX_ENTITIES]Health = .{Health{}} ** MAX_ENTITIES,
-    enemy_tags: [MAX_ENTITIES]EnemyTag = .{EnemyTag{}} ** MAX_ENTITIES,
+    transforms: [MAX_ENTITIES]Transform = @splat(Transform{}),
+    spins: [MAX_ENTITIES]Spin = @splat(Spin{}),
+    mesh_renderers: [MAX_ENTITIES]MeshRenderer = @splat(MeshRenderer{}),
+    velocities: [MAX_ENTITIES]Velocity = @splat(Velocity{}),
+    colliders: [MAX_ENTITIES]Collider = @splat(Collider{}),
+    healths: [MAX_ENTITIES]Health = @splat(Health{}),
+    enemy_tags: [MAX_ENTITIES]EnemyTag = @splat(EnemyTag{}),
 
     pub fn init() World {
         return World{};

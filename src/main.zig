@@ -2,136 +2,15 @@ const std = @import("std");
 const Zetal = @import("Zetal");
 const Math = Zetal.render.math;
 const Vec3 = Math.Vec3;
+const LightUniforms = Zetal.render.lighting.LightUniforms;
 const Io = std.Io;
 
-fn simpleSleep(ns: u64) void {
-    const seconds = ns / std.time.ns_per_s;
-    const nanoseconds = ns % std.time.ns_per_s;
-    var ts = std.c.timespec{ .sec = @intCast(seconds), .nsec = @intCast(nanoseconds) };
-    _ = std.c.nanosleep(&ts, null);
-}
-
-const LightUniforms = extern struct {
-    light_pos: [3]f32,
-    _pad0: f32 = 0,
-    view_pos: [3]f32,
-    _pad1: f32 = 0,
-    light_color: [3]f32,
-    _pad2: f32 = 0,
-    ambient_strength: f32,
-    specular_strength: f32,
-    shininess: f32,
-    _pad3: f32 = 0,
-};
-
-fn ortho(left: f32, right_: f32, bottom: f32, top: f32, near: f32, far: f32) Math.Mat4x4 {
-    const rl = right_ - left;
-    const tb = top - bottom;
-    const fn_ = far - near;
-    var m = Math.Mat4x4.identity();
-    m.columns[0][0] = 2.0 / rl;
-    m.columns[1][1] = 2.0 / tb;
-    m.columns[2][2] = -1.0 / fn_;
-    m.columns[3][0] = -(right_ + left) / rl;
-    m.columns[3][1] = -(top + bottom) / tb;
-    m.columns[3][2] = -near / fn_;
-    return m;
-}
-
-/// Create a depth stencil state with raw ObjC: depthWrite OFF, compare always.
-fn createSkyboxDepthState(device: Zetal.MetalDevice) ?Zetal.render.pipeline.MetalDepthStencilState {
-    const desc_class = Zetal.objc.objc_getClass("MTLDepthStencilDescriptor");
-    const alloc_sel = Zetal.objc.sel("alloc");
-    const init_sel = Zetal.objc.sel("init");
-
-    const AllocFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-    const alloc_msg: AllocFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    var desc = alloc_msg(desc_class, alloc_sel);
-
-    const InitFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-    const init_msg: InitFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    desc = init_msg(desc, init_sel);
-
-    // setDepthCompareFunction: 3 = LessEqual
-    const cmp_sel = Zetal.objc.sel("setDepthCompareFunction:");
-    const CmpFn = *const fn (?*anyopaque, ?*anyopaque, u64) callconv(.c) void;
-    const cmp_msg: CmpFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    cmp_msg(desc, cmp_sel, 3);
-
-    // setDepthWriteEnabled: false
-    const write_sel = Zetal.objc.sel("setDepthWriteEnabled:");
-    const WriteFn = *const fn (?*anyopaque, ?*anyopaque, bool) callconv(.c) void;
-    const write_msg: WriteFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    write_msg(desc, write_sel, false);
-
-    const new_sel = Zetal.objc.sel("newDepthStencilStateWithDescriptor:");
-    const NewFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?Zetal.objc.Object;
-    const new_msg: NewFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    if (new_msg(device.handle, new_sel, desc)) |s| return Zetal.render.pipeline.MetalDepthStencilState{ .handle = s };
-    return null;
-}
-
-fn loadNSSound(path: [*:0]const u8) ?Zetal.objc.Object {
-    const NSString = Zetal.objc.objc_getClass("NSString");
-    const str_sel = Zetal.objc.sel("stringWithUTF8String:");
-    const StrFn = *const fn (?*anyopaque, ?*anyopaque, [*:0]const u8) callconv(.c) ?*anyopaque;
-    const str_msg: StrFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    const nsStr = str_msg(NSString, str_sel, path) orelse return null;
-
-    const NSSound = Zetal.objc.objc_getClass("NSSound");
-    const alloc_sel = Zetal.objc.sel("alloc");
-    const AllocFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-    const alloc_msg: AllocFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    const sound = alloc_msg(NSSound, alloc_sel) orelse return null;
-
-    const init_sel = Zetal.objc.sel("initWithContentsOfFile:byReference:");
-    const InitFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque, bool) callconv(.c) ?Zetal.objc.Object;
-    const init_msg: InitFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    return init_msg(sound, init_sel, nsStr, true);
-}
-
-fn playNSSound(sound: Zetal.objc.Object) void {
-    // Stop then play — allows rapid re-triggering
-    const stop_sel = Zetal.objc.sel("stop");
-    const StopFn = *const fn (?Zetal.objc.Object, ?*anyopaque) callconv(.c) void;
-    const stop_msg: StopFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    stop_msg(sound, stop_sel);
-
-    const play_sel = Zetal.objc.sel("play");
-    const PlayFn = *const fn (?Zetal.objc.Object, ?*anyopaque) callconv(.c) bool;
-    const play_msg: PlayFn = @ptrCast(&Zetal.objc.objc_msgSend);
-    _ = play_msg(sound, play_sel);
-}
-
-// Skybox cube vertices (inside-facing, 36 verts, just float4 positions)
-const skybox_verts = [36][4]f32{
-    // +Z face (looking inward)
-    .{ -1, 1, 1, 1 },  .{ -1, -1, 1, 1 },  .{ 1, -1, 1, 1 },
-    .{ -1, 1, 1, 1 },  .{ 1, -1, 1, 1 },   .{ 1, 1, 1, 1 },
-    // -Z face
-    .{ 1, 1, -1, 1 },  .{ 1, -1, -1, 1 },  .{ -1, -1, -1, 1 },
-    .{ 1, 1, -1, 1 },  .{ -1, -1, -1, 1 }, .{ -1, 1, -1, 1 },
-    // +X face
-    .{ 1, 1, 1, 1 },   .{ 1, -1, 1, 1 },   .{ 1, -1, -1, 1 },
-    .{ 1, 1, 1, 1 },   .{ 1, -1, -1, 1 },  .{ 1, 1, -1, 1 },
-    // -X face
-    .{ -1, 1, -1, 1 }, .{ -1, -1, -1, 1 }, .{ -1, -1, 1, 1 },
-    .{ -1, 1, -1, 1 }, .{ -1, -1, 1, 1 },  .{ -1, 1, 1, 1 },
-    // +Y face (ceiling)
-    .{ -1, 1, -1, 1 }, .{ -1, 1, 1, 1 },   .{ 1, 1, 1, 1 },
-    .{ -1, 1, -1, 1 }, .{ 1, 1, 1, 1 },    .{ 1, 1, -1, 1 },
-    // -Y face (floor)
-    .{ -1, -1, 1, 1 }, .{ -1, -1, -1, 1 }, .{ 1, -1, -1, 1 },
-    .{ -1, -1, 1, 1 }, .{ 1, -1, -1, 1 },  .{ 1, -1, 1, 1 },
-};
-
-// ============================================================
-// FPS GAMEPLAY CONSTANTS
-// ============================================================
-
-const PROJECTILE_SPEED: f32 = 40.0; // Cube launch velocity
-const FIRE_COOLDOWN: f32 = 0.15; // Seconds between shots
-const KILL_Y: f32 = -30.0; // Entities below this get despawned
+const KILL_Y: f32 = -30.0;
+const GROUND_Y: f32 = Zetal.render.buffers.GROUND_Y;
+const SUN_POS = Vec3.init(10.0, 20.0, 10.0);
+const SUN_TARGET = Vec3.init(0.0, -5.0, -10.0);
+const SUN_LEN = @sqrt(SUN_POS.x * SUN_POS.x + SUN_POS.y * SUN_POS.y + SUN_POS.z * SUN_POS.z);
+const SUN_DIR = [3]f32{ SUN_POS.x / SUN_LEN, SUN_POS.y / SUN_LEN, SUN_POS.z / SUN_LEN };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -146,527 +25,221 @@ pub fn main(init: std.process.Init) !void {
 
     var core = try Zetal.engine.Core.init();
 
-    // Load Assets
-    const model = try Zetal.loader.loadObj(allocator, "cube.obj", io);
-    const hands_model = try Zetal.loader.loadObj(allocator, "hands.obj", io);
-    const ppm = try Zetal.texture.loadPPM(allocator, "test.ppm", io);
-    defer ppm.deinit();
-
-    // Load gun texture
+    // --- Assets ---
+    const cube_mesh = try Zetal.loader.loadObj(allocator, "cube.obj", io);
+    const gun_mesh = try Zetal.loader.loadObj(allocator, "hands.obj", io);
+    const world_ppm = try Zetal.texture.loadPPM(allocator, "test.ppm", io);
+    defer world_ppm.deinit();
     const gun_ppm = try Zetal.texture.loadPPM(allocator, "gun_metal.ppm", io);
     defer gun_ppm.deinit();
 
-    // --- ECS WORLD ---
+    // --- World ---
     var world = Zetal.ecs.World.init();
     try Zetal.scene.spawnFPSScene(&world);
-
     const initial_count = world.countMatching(Zetal.ecs.mask(&.{ .transform, .mesh_renderer }));
 
-    // --- GPU COMPUTE PHYSICS ---
+    // --- GPU compute physics ---
     var compute_phys = try Zetal.render.compute.ComputePhysics.init(
         core.device,
         core.queue,
         Zetal.ecs.world.MAX_ENTITIES,
     );
 
-    // Upload Texture
-    const texture = core.device.createTexture(ppm.width, ppm.height, 70).?;
-    const region = Zetal.MTLRegion{ .origin = .{ .x = 0, .y = 0, .z = 0 }, .size = .{ .width = ppm.width, .height = ppm.height, .depth = 1 } };
-    texture.replaceRegion(region, @ptrCast(ppm.pixels.ptr), ppm.width * 4);
-
-    // Upload gun texture
-    const gun_texture = core.device.createTexture(gun_ppm.width, gun_ppm.height, 70).?;
-    const gun_region = Zetal.MTLRegion{ .origin = .{ .x = 0, .y = 0, .z = 0 }, .size = .{ .width = gun_ppm.width, .height = gun_ppm.height, .depth = 1 } };
-    gun_texture.replaceRegion(gun_region, @ptrCast(gun_ppm.pixels.ptr), gun_ppm.width * 4);
-
-    // --- SHADER LIBRARY ---
-    const library = core.device.createLibrary(Zetal.render.shader.triangle_source).?;
-
-    // --- PIPELINES ---
-
-    // Cube pipeline (instanced)
-    const cube_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
-    cube_pipe_desc.setVertexFunction(library.getFunction("vertex_main").?.handle);
-    cube_pipe_desc.setFragmentFunction(library.getFunction("fragment_main").?.handle);
-    cube_pipe_desc.setColorAttachmentPixelFormat(0, .bgra8_unorm);
-    cube_pipe_desc.setDepthAttachmentPixelFormat(.depth32_float);
-    const cube_pipeline = core.device.createRenderPipelineState(cube_pipe_desc).?;
-
-    // Ground pipeline (single)
-    const ground_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
-    ground_pipe_desc.setVertexFunction(library.getFunction("vertex_single").?.handle);
-    ground_pipe_desc.setFragmentFunction(library.getFunction("fragment_main").?.handle);
-    ground_pipe_desc.setColorAttachmentPixelFormat(0, .bgra8_unorm);
-    ground_pipe_desc.setDepthAttachmentPixelFormat(.depth32_float);
-    const ground_pipeline = core.device.createRenderPipelineState(ground_pipe_desc).?;
-
-    // Shadow pipeline (instanced, depth-only)
-    const shadow_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
-    shadow_pipe_desc.setVertexFunction(library.getFunction("shadow_vertex").?.handle);
-    shadow_pipe_desc.setDepthAttachmentPixelFormat(.depth32_float);
-    const shadow_pipeline = core.device.createRenderPipelineState(shadow_pipe_desc).?;
-
-    // Shadow ground pipeline (single, depth-only)
-    const shadow_ground_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
-    shadow_ground_desc.setVertexFunction(library.getFunction("shadow_vertex_single").?.handle);
-    shadow_ground_desc.setDepthAttachmentPixelFormat(.depth32_float);
-    const shadow_ground_pipeline = core.device.createRenderPipelineState(shadow_ground_desc).?;
-
-    // Skybox pipeline
-    const sky_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
-    sky_pipe_desc.setVertexFunction(library.getFunction("skybox_vertex").?.handle);
-    sky_pipe_desc.setFragmentFunction(library.getFunction("skybox_fragment").?.handle);
-    sky_pipe_desc.setColorAttachmentPixelFormat(0, .bgra8_unorm);
-    sky_pipe_desc.setDepthAttachmentPixelFormat(.depth32_float);
-    const sky_pipeline = core.device.createRenderPipelineState(sky_pipe_desc).?;
-
-    // --- DEPTH STATES ---
-
-    // Normal: depth write ON, compare Less
-    const depth_desc = Zetal.render.pipeline.MetalDepthStencilDescriptor.create().?;
-    depth_desc.setDepthCompareFunction(.less);
-    depth_desc.setDepthWriteEnabled(true);
-    const depth_state = core.device.createDepthStencilState(depth_desc).?;
-
-    // Skybox: depth write OFF, compare LessEqual (skybox z = 1.0 = clear depth)
-    const sky_depth_state = createSkyboxDepthState(core.device).?;
-
-    // --- CROSSHAIR PIPELINE ---
-    const ch = Zetal.render.crosshair;
-    const ch_lib = core.device.createLibrary(ch.crosshair_source).?;
-
-    const ch_pipe_desc = Zetal.render.MetalRenderPipelineDescriptor.create().?;
-    ch_pipe_desc.setVertexFunction(ch_lib.getFunction("crosshair_vertex").?.handle);
-    ch_pipe_desc.setFragmentFunction(ch_lib.getFunction("crosshair_fragment").?.handle);
-    ch_pipe_desc.setColorAttachmentPixelFormat(0, .bgra8_unorm);
-    ch_pipe_desc.setDepthAttachmentPixelFormat(.depth32_float);
-    const ch_pipeline = core.device.createRenderPipelineState(ch_pipe_desc).?;
-
-    // Crosshair depth state: always compare. no depth write (renders on top of everything)
-    const ch_depth_state = blk: {
-        const desc = Zetal.render.pipeline.MetalDepthStencilDescriptor.create().?;
-        desc.setDepthCompareFunction(.always); // always
-        desc.setDepthWriteEnabled(false);
-        break :blk core.device.createDepthStencilState(desc).?;
-    };
-
-    // Viewmodel depth state: always draw on top of walls, but depth-test against itself
-    const vm_depth_state = blk: {
-        const desc = Zetal.render.pipeline.MetalDepthStencilDescriptor.create().?;
-        desc.setDepthCompareFunction(.always); 
-        desc.setDepthWriteEnabled(true);
-        break :blk core.device.createDepthStencilState(desc).?;
-    };
-
-    // Crosshair vertex buffer
-    const ch_vbuf = core.device.createBuffer(@sizeOf([4]f32) * ch.VERT_COUNT, .StorageModeShared).?;
-    @memcpy(
-        @as([*][4]f32, @ptrCast(@alignCast(ch_vbuf.contents())))[0..ch.VERT_COUNT],
-        &ch.vertices,
+    // --- Render resources ---
+    const pipes = try Zetal.render.pipelines.Pipelines.init(core.device);
+    const static_bufs = try Zetal.render.buffers.StaticBuffers.init(
+        core.device,
+        cube_mesh,
+        gun_mesh,
+        world_ppm,
+        gun_ppm,
+    );
+    const instance_bufs = try Zetal.render.buffers.InstanceBuffers.init(
+        core.device,
+        Zetal.ecs.world.MAX_ENTITIES,
     );
 
-    // --- CUBE BUFFERS ---
-    const Vertex = Zetal.render.vertex.Vertex;
-    const vertex_buffer = core.device.createBuffer(@sizeOf(Vertex) * model.vertices.len, .StorageModeShared).?;
-    @memcpy(@as([*]Vertex, @ptrCast(@alignCast(vertex_buffer.contents())))[0..model.vertices.len], model.vertices);
-    const index_buffer = core.device.createBuffer(@sizeOf(u32) * model.indices.len, .StorageModeShared).?;
-    @memcpy(@as([*]u32, @ptrCast(@alignCast(index_buffer.contents())))[0..model.indices.len], model.indices);
-
-    // --- HANDS BUFFER --- // <-- NEW
-    const hands_vbuf = core.device.createBuffer(@sizeOf(Vertex) * hands_model.vertices.len, .StorageModeShared).?;
-    @memcpy(@as([*]Vertex, @ptrCast(@alignCast(hands_vbuf.contents())))[0..hands_model.vertices.len], hands_model.vertices);
-
-    // NEW: Create the index buffer for the gun
-    const hands_ibuf = core.device.createBuffer(@sizeOf(u32) * hands_model.indices.len, .StorageModeShared).?;
-    @memcpy(@as([*]u32, @ptrCast(@alignCast(hands_ibuf.contents())))[0..hands_model.indices.len], hands_model.indices);
-
-    // Note: If your hands.obj has indices, you'll want to load a hands_ibuf as well! 
-    // If your loader spits out raw unindexed vertices for the hands, you don't need an index buffer.
-
-    // Instance buffers — sized for MAX_ENTITIES since projectiles spawn at runtime
-    const max_instances: u32 = Zetal.ecs.world.MAX_ENTITIES;
-    const mvp_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * max_instances, .StorageModeShared).?;
-    const model_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * max_instances, .StorageModeShared).?;
-    const shadow_mvp_buffer = core.device.createBuffer(@sizeOf(Math.Mat4x4) * max_instances, .StorageModeShared).?;
-    const hit_timer_buffer = core.device.createBuffer(@sizeOf(f32) * max_instances, .StorageModeShared).?;
-
-    // --- GROUND PLANE ---
-    const ground_size: f32 = 50.0;
-    const ground_y: f32 = -12.0;
-    const ground_verts = [_]Vertex{
-        .{ .position = .{ -ground_size, ground_y, -ground_size, 1 }, .color = .{ 0.3, 0.35, 0.3, 1 }, .uv = .{ 0, 0, 0, 0 }, .normal = .{ 0, 1, 0, 0 } },
-        .{ .position = .{ ground_size, ground_y, -ground_size, 1 }, .color = .{ 0.3, 0.35, 0.3, 1 }, .uv = .{ 10, 0, 0, 0 }, .normal = .{ 0, 1, 0, 0 } },
-        .{ .position = .{ ground_size, ground_y, ground_size, 1 }, .color = .{ 0.3, 0.35, 0.3, 1 }, .uv = .{ 10, 10, 0, 0 }, .normal = .{ 0, 1, 0, 0 } },
-        .{ .position = .{ -ground_size, ground_y, ground_size, 1 }, .color = .{ 0.3, 0.35, 0.3, 1 }, .uv = .{ 0, 10, 0, 0 }, .normal = .{ 0, 1, 0, 0 } },
-    };
-    const ground_indices = [_]u32{ 0, 1, 2, 0, 2, 3 };
-
-    const ground_vbuf = core.device.createBuffer(@sizeOf(Vertex) * ground_verts.len, .StorageModeShared).?;
-    @memcpy(@as([*]Vertex, @ptrCast(@alignCast(ground_vbuf.contents())))[0..ground_verts.len], &ground_verts);
-    const ground_ibuf = core.device.createBuffer(@sizeOf(u32) * ground_indices.len, .StorageModeShared).?;
-    @memcpy(@as([*]u32, @ptrCast(@alignCast(ground_ibuf.contents())))[0..ground_indices.len], &ground_indices);
-
-    // --- SKYBOX BUFFER ---
-    const sky_vbuf = core.device.createBuffer(@sizeOf([4]f32) * 36, .StorageModeShared).?;
-    @memcpy(@as([*][4]f32, @ptrCast(@alignCast(sky_vbuf.contents())))[0..36], &skybox_verts);
+    // --- Player ---
+    var player = Zetal.Player.init();
 
     try stdout.print("FPS Mode Ready. {d} target cubes. Left-click to fire!\n", .{initial_count});
     try stdout.print("GPU Compute Physics: spatial hash grid + impact conversion\n", .{});
     try stdout.flush();
 
-    // --- CAMERA STATE ---
-    var cam_pos = Vec3.init(0, -8, 5);
-    var cam_yaw: f32 = -90.0;
-    var cam_pitch: f32 = 0.0;
-    const move_speed: f32 = 5.0;
-    const mouse_sensitivity: f32 = 0.1;
-    const cam_radius: f32 = 0.3;
-
-    // --- FPS STATE ---
-    var fire_cooldown: f32 = 0.0;
-
-    // -- PLAYER PHYSICS STATE ---
-    var player_vy: f32 = 0.0;
-    var is_grounded: bool = false;
-    const player_height: f32 = 2.0;
-    const jump_force: f32 = 18.0;
-    const gravity: f32 = -45.0;
-
-    // --- SCREEN SHAKE HIT MARKER ---
-    var shake_timer: f32 = 0.0;
-    var hit_marker_timer: f32 = 0.0;
-
     const start_time = Io.Clock.Timestamp.now(io, .awake);
     var last_time = start_time;
 
-    const gunshot_sound = loadNSSound("gunshot.wav");
-
     while (true) {
+        var pool = Zetal.AutoreleasePool.init();
+        defer pool.deinit();
+
         const now = Io.Clock.Timestamp.now(io, .awake);
-        const frame_dt = last_time.durationTo(now);
+        const frame_dt_ns = last_time.durationTo(now).raw.toNanoseconds();
         last_time = now;
-        const dt_sec = @as(f32, @floatFromInt(frame_dt.raw.toMilliseconds())) / 1000.0;
+        const dt_sec = @as(f32, @floatFromInt(frame_dt_ns)) / @as(f32, std.time.ns_per_s);
+
+        const total_elapsed_ns = start_time.durationTo(now).raw.toNanoseconds();
+        const time_sec = @as(f32, @floatFromInt(total_elapsed_ns)) / @as(f32, std.time.ns_per_s);
 
         core.pollEvents();
         const aspect = core.updateSize();
 
-        // Mouse Look
-        cam_yaw += core.app.mouse_dx * mouse_sensitivity;
-        cam_pitch -= core.app.mouse_dy * mouse_sensitivity;
-        if (cam_pitch > 89.0) cam_pitch = 89.0;
-        if (cam_pitch < -89.0) cam_pitch = -89.0;
+        // ── Per-frame simulation ─────────────────────────────
+        player.update(&core.app, &world, GROUND_Y, dt_sec);
 
-        // Camera Vectors
-        const yaw_rad = std.math.degreesToRadians(cam_yaw);
-        const pitch_rad = std.math.degreesToRadians(cam_pitch);
-
-        const front = Vec3.norm(Vec3.init(
-            @cos(yaw_rad) * @cos(pitch_rad),
-            @sin(pitch_rad),
-            @sin(yaw_rad) * @cos(pitch_rad),
-        ));
-
-        const world_up = Vec3.init(0, 1, 0);
-        const right = Vec3.norm(Vec3.cross(front, world_up));
-        const cam_up = Vec3.norm(Vec3.cross(right, front));
-
-        // MOVEMENT & LOGIC (Planner Walking)
-        const velocity = move_speed * dt_sec;
-
-        const flat_front = Vec3.norm(Vec3.init(front.x, 0, front.z));
-
-        if (core.app.isPressed(.W)) cam_pos = Vec3.add(cam_pos, Vec3.scale(flat_front, velocity));
-        if (core.app.isPressed(.S)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(flat_front, velocity));
-        if (core.app.isPressed(.A)) cam_pos = Vec3.sub(cam_pos, Vec3.scale(right, velocity));
-        if (core.app.isPressed(.D)) cam_pos = Vec3.add(cam_pos, Vec3.scale(right, velocity));
-
-        // --- PLAYER PHYSICS (Gravity & Jumping) ---
-        if (core.app.isPressed(.Space) and is_grounded) {
-            player_vy = jump_force;
-            is_grounded = false;
-        }
-
-        // Apply constant gravity
-        player_vy += gravity * dt_sec;
-        cam_pos.y += player_vy * dt_sec;
-
-        // Hard Floor Collision
-        // ground_y is your literal floor. The camera is at the top of the player's head.
-        if (cam_pos.y <= ground_y + player_height) {
-            cam_pos.y = ground_y + player_height;
-            player_vy = 0;
-            is_grounded = true;
-        } else {
-            is_grounded = false; // We are falling!
-        }
-
-        // Camera Collision
-        const resolved = Zetal.systems.resolveCamera(&world, cam_pos.x, cam_pos.y, cam_pos.z, cam_radius);
-        cam_pos = Vec3.init(resolved.x, resolved.y, resolved.z);
-
-        // ═══════════════════════════════════════════
-        // FPS FIRE
-        // ═══════════════════════════════════════════
-        fire_cooldown -= dt_sec;
-        if (fire_cooldown < 0) fire_cooldown = 0;
-
-        // LEFT CLICK → Projectile (Physics Cube)
-        if (core.app.mouse_left_pressed and fire_cooldown <= 0) {
-            const spawn_offset = 1.0;
-            const spawn_pos = Vec3.add(cam_pos, Vec3.scale(front, spawn_offset));
-            _ = Zetal.scene.spawnProjectile(
-                &world,
-                spawn_pos.x,
-                spawn_pos.y,
-                spawn_pos.z,
-                front.x * PROJECTILE_SPEED,
-                front.y * PROJECTILE_SPEED,
-                front.z * PROJECTILE_SPEED,
-            ) catch {};
-
-            shake_timer = 0.06; // Snappy screen shake
-            if (gunshot_sound) |snd| playNSSound(snd);
-            fire_cooldown = FIRE_COOLDOWN;
-        }
-
-        // Calculate time_sec BEFORE using it for the screen shake
-        const total_elapsed = start_time.durationTo(now).raw.toMilliseconds();
-        const time_sec = @as(f32, @floatFromInt(total_elapsed)) / 1000.0;
-
-        // Screen shake decay
-        shake_timer -= dt_sec;
-        if (shake_timer < 0) shake_timer = 0;
-
-        var shake_offset = Vec3.init(0, 0, 0);
-        if (shake_timer > 0) {
-            const intensity = shake_timer * 0.3;
-            // Simple deterministic shake using time
-            const t = time_sec * 120.0;
-            shake_offset = Vec3.init(
-                @sin(t * 7.3) * intensity,
-                @sin(t * 11.1) * intensity,
-                0,
-            );
-        }
-
-        // Hit marker decay
-        hit_marker_timer -= dt_sec * 5.0;
-        if (hit_marker_timer < 0) hit_marker_timer = 0;
-
-        // View-Projection
-        const shaken_pos = Vec3.add(cam_pos, shake_offset);
-        const center = Vec3.add(cam_pos, front);
-        const view_mat = Math.Mat4x4.lookAt(shaken_pos, center, cam_up);
-        const proj_mat = Math.Mat4x4.perspective(std.math.degreesToRadians(45.0), aspect, 0.1, 200.0);
-        const view_proj = Math.Mat4x4.mul(proj_mat, view_mat);
-
-        // Light View-Projection
-        const light_pos = Vec3.init(10.0, 20.0, 10.0);
-        const light_target = Vec3.init(0.0, -5.0, -10.0);
-        const light_view = Math.Mat4x4.lookAt(light_pos, light_target, Vec3.init(0, 1, 0));
-        const light_proj = ortho(-30.0, 30.0, -30.0, 30.0, 0.1, 60.0);
-        const light_vp = Math.Mat4x4.mul(light_proj, light_view);
-
-        // Spin stays on CPU (purely visual, not physics)
         Zetal.systems.spinSystem(&world, time_sec);
-        Zetal.systems.hitTimerSystem(&world, dt_sec); // NEW: decay hit flash
+        Zetal.systems.hitTimerSystem(&world, dt_sec);
 
-        // ── GPU COMPUTE PHYSICS ──────────────────────────────
         compute_phys.uploadToGPU(&world);
         compute_phys.dispatch(dt_sec, world.count);
         compute_phys.downloadToWorld(&world);
 
-        const pairs = compute_phys.readPairs();
-        const hit_confirmed = Zetal.systems.resolveCollisionPairs(&world, pairs, 0.5);
-
-        // Trigger the crosshair shader animation
-        if (hit_confirmed) {
-            hit_marker_timer = 1.0;
+        if (Zetal.systems.resolveCollisionPairs(&world, compute_phys.readPairs(), 0.5)) {
+            player.onConfirmedHit();
         }
 
-        Zetal.systems.enforceFloor(&world, ground_y, 0.6);
-        // ─────────────────────────────────────────────────────
-
-        // Cleanup: despawn entities that fell below the world
+        Zetal.systems.enforceFloor(&world, GROUND_Y, 0.6);
         _ = Zetal.systems.cleanupFallen(&world, KILL_Y);
 
-        // Build instance buffers
-        const gpu_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(mvp_buffer.contents())));
-        const gpu_models = @as([*]Math.Mat4x4, @ptrCast(@alignCast(model_buffer.contents())));
-        const gpu_hit_timers = @as([*]f32, @ptrCast(@alignCast(hit_timer_buffer.contents())));
-        const drawn = Zetal.systems.buildInstanceBuffer(&world, view_proj, gpu_mvps, gpu_models, gpu_hit_timers);
+        // ── Per-frame matrices ───────────────────────────────
+        const cam = player.camera(aspect, time_sec);
 
-        // Shadow MVPs
-        const gpu_shadow_mvps = @as([*]Math.Mat4x4, @ptrCast(@alignCast(shadow_mvp_buffer.contents())));
+        const light_view = Math.Mat4x4.lookAt(SUN_POS, SUN_TARGET, Vec3.init(0, 1, 0));
+        const light_proj = Math.Mat4x4.ortho(-30.0, 30.0, -30.0, 30.0, 0.1, 60.0);
+        const light_vp = Math.Mat4x4.mul(light_proj, light_view);
+
+        const mvps = instance_bufs.mvps();
+        const models = instance_bufs.models();
+        const hit_timers = instance_bufs.hitTimers();
+        const drawn = Zetal.systems.buildInstanceBuffer(&world, cam.view_proj, mvps, models, hit_timers);
+
+        const shadow_mvps = instance_bufs.shadowMvps();
         for (0..drawn) |idx| {
-            gpu_shadow_mvps[idx] = Math.Mat4x4.mul(light_vp, gpu_models[idx]);
+            shadow_mvps[idx] = Math.Mat4x4.mul(light_vp, models[idx]);
         }
 
-        // Light uniforms
-        var light = LightUniforms{
-            .light_pos = .{ 10.0, 20.0, 10.0 },
-            .view_pos = .{ cam_pos.x, cam_pos.y, cam_pos.z },
+        const light = LightUniforms{
+            .light_pos = .{ SUN_POS.x, SUN_POS.y, SUN_POS.z },
+            .view_pos = .{ player.pos.x, player.pos.y, player.pos.z },
             .light_color = .{ 1.0, 0.95, 0.9 },
             .ambient_strength = 0.15,
             .specular_strength = 0.5,
             .shininess = 32.0,
         };
-        _ = &light;
 
-        // Sun direction (matches light position, normalized)
-        var sun_dir = [3]f32{ 10.0, 20.0, 10.0 };
-        _ = &sun_dir;
-        const sun_len = @sqrt(sun_dir[0] * sun_dir[0] + sun_dir[1] * sun_dir[1] + sun_dir[2] * sun_dir[2]);
-        sun_dir[0] /= sun_len;
-        sun_dir[1] /= sun_len;
-        sun_dir[2] /= sun_len;
-
-        // Ground matrices
         const ground_model = Math.Mat4x4.identity();
-        const ground_mvp = Math.Mat4x4.mul(view_proj, ground_model);
+        const ground_mvp = Math.Mat4x4.mul(cam.view_proj, ground_model);
         const ground_shadow_mvp = Math.Mat4x4.mul(light_vp, ground_model);
 
-        // =============================================
-        // PASS 1: SHADOW MAP
-        // =============================================
+        // ── PASS 1: shadow map ───────────────────────────────
         if (core.beginShadowPass()) |shadow| {
-            shadow.enc.setDepthStencilState(depth_state.handle);
+            shadow.enc.setDepthStencilState(pipes.depth.handle);
 
-            // Cubes
-            shadow.enc.setRenderPipelineState(shadow_pipeline.handle);
-            shadow.enc.setVertexBuffer(vertex_buffer.handle, 0, 0);
-            shadow.enc.setVertexBuffer(shadow_mvp_buffer.handle, 0, 1);
-            shadow.enc.drawIndexedPrimitivesInstanced(.triangle, model.indices.len, .uint32, index_buffer.handle, 0, drawn);
+            shadow.enc.setRenderPipelineState(pipes.shadow.handle);
+            shadow.enc.setVertexBuffer(static_bufs.cube_vertex.handle, 0, 0);
+            shadow.enc.setVertexBuffer(instance_bufs.shadow_mvp.handle, 0, 1);
+            shadow.enc.drawIndexedPrimitivesInstanced(
+                .triangle,
+                static_bufs.cube_index_count,
+                .uint32,
+                static_bufs.cube_index.handle,
+                0,
+                drawn,
+            );
 
-            // Ground
-            shadow.enc.setRenderPipelineState(shadow_ground_pipeline.handle);
-            shadow.enc.setVertexBuffer(ground_vbuf.handle, 0, 0);
+            shadow.enc.setRenderPipelineState(pipes.shadow_ground.handle);
+            shadow.enc.setVertexBuffer(static_bufs.ground_vertex.handle, 0, 0);
             shadow.enc.setVertexBytes(@ptrCast(&ground_shadow_mvp), @sizeOf(Math.Mat4x4), 1);
-            shadow.enc.drawIndexedPrimitives(.triangle, ground_indices.len, .uint32, ground_ibuf.handle, 0);
+            shadow.enc.drawIndexedPrimitives(
+                .triangle,
+                static_bufs.ground_index_count,
+                .uint32,
+                static_bufs.ground_index.handle,
+                0,
+            );
 
             shadow.enc.endEncoding();
             shadow.cmd.commit();
         }
 
-        // =============================================
-        // PASS 2: MAIN RENDER
-        // =============================================
+        // ── PASS 2: main color + depth ───────────────────────
         const bg_color = Zetal.render.MTLClearColor{ .red = 0.0, .green = 0.0, .blue = 0.0, .alpha = 1.0 };
         if (core.beginFrame(bg_color)) |frame| {
+            // Skybox first — depth write off, LessEqual
+            frame.enc.setDepthStencilState(pipes.sky_depth.handle);
+            frame.enc.setRenderPipelineState(pipes.sky.handle);
+            frame.enc.setVertexBuffer(static_bufs.skybox_vertex.handle, 0, 0);
+            frame.enc.setVertexBytes(@ptrCast(&cam.view_proj), @sizeOf(Math.Mat4x4), 1);
+            frame.enc.setFragmentBytes(@ptrCast(&SUN_DIR), @sizeOf([3]f32), 0);
+            frame.enc.drawPrimitives(.triangle, 0, static_bufs.skybox_vertex_count);
 
-            // --- SKYBOX (draw first, no depth write, LessEqual) ---
-            frame.enc.setDepthStencilState(sky_depth_state.handle);
-            frame.enc.setRenderPipelineState(sky_pipeline.handle);
-            frame.enc.setVertexBuffer(sky_vbuf.handle, 0, 0);
-            frame.enc.setVertexBytes(@ptrCast(&view_proj), @sizeOf(Math.Mat4x4), 1);
-            frame.enc.setFragmentBytes(@ptrCast(&sun_dir), @sizeOf([3]f32), 0);
-            frame.enc.drawPrimitives(.triangle, 0, 36);
-
-            // --- Switch to normal depth state ---
-            frame.enc.setDepthStencilState(depth_state.handle);
-
-            // Bind textures
-            frame.enc.setFragmentTexture(texture.handle, 0);
+            // Normal depth state from here on
+            frame.enc.setDepthStencilState(pipes.depth.handle);
+            frame.enc.setFragmentTexture(static_bufs.world_texture.handle, 0);
             frame.enc.setFragmentTexture(core.shadow_map.handle, 1);
             frame.enc.setFragmentBytes(@ptrCast(&light), @sizeOf(LightUniforms), 2);
 
-            // --- CUBES (instanced) ---
-            frame.enc.setRenderPipelineState(cube_pipeline.handle);
-            frame.enc.setVertexBuffer(vertex_buffer.handle, 0, 0);
-            frame.enc.setVertexBuffer(mvp_buffer.handle, 0, 1);
-            frame.enc.setVertexBuffer(model_buffer.handle, 0, 3);
-            frame.enc.setVertexBuffer(hit_timer_buffer.handle, 0, 5);
+            // Cubes (instanced)
+            frame.enc.setRenderPipelineState(pipes.cube.handle);
+            frame.enc.setVertexBuffer(static_bufs.cube_vertex.handle, 0, 0);
+            frame.enc.setVertexBuffer(instance_bufs.mvp.handle, 0, 1);
+            frame.enc.setVertexBuffer(instance_bufs.model.handle, 0, 3);
+            frame.enc.setVertexBuffer(instance_bufs.hit_timer.handle, 0, 5);
             frame.enc.setVertexBytes(@ptrCast(&light_vp), @sizeOf(Math.Mat4x4), 4);
-            frame.enc.drawIndexedPrimitivesInstanced(.triangle, model.indices.len, .uint32, index_buffer.handle, 0, drawn);
+            frame.enc.drawIndexedPrimitivesInstanced(
+                .triangle,
+                static_bufs.cube_index_count,
+                .uint32,
+                static_bufs.cube_index.handle,
+                0,
+                drawn,
+            );
 
-            // --- GROUND (single) ---
-            frame.enc.setRenderPipelineState(ground_pipeline.handle);
-            frame.enc.setVertexBuffer(ground_vbuf.handle, 0, 0);
+            // Ground
+            frame.enc.setRenderPipelineState(pipes.ground.handle);
+            frame.enc.setVertexBuffer(static_bufs.ground_vertex.handle, 0, 0);
             frame.enc.setVertexBytes(@ptrCast(&ground_mvp), @sizeOf(Math.Mat4x4), 1);
             frame.enc.setVertexBytes(@ptrCast(&ground_model), @sizeOf(Math.Mat4x4), 3);
             frame.enc.setVertexBytes(@ptrCast(&light_vp), @sizeOf(Math.Mat4x4), 4);
-            frame.enc.drawIndexedPrimitives(.triangle, ground_indices.len, .uint32, ground_ibuf.handle, 0);
+            frame.enc.drawIndexedPrimitives(
+                .triangle,
+                static_bufs.ground_index_count,
+                .uint32,
+                static_bufs.ground_index.handle,
+                0,
+            );
 
-            // ===============================================
-            // PASS 3: VIEWMODEL (Placeholder Gun)
-            // ===============================================
-            frame.enc.setDepthStencilState(vm_depth_state.handle);
-            // We can reuse your single-mesh ground pipeline for the gun!
-            frame.enc.setRenderPipelineState(ground_pipeline.handle); 
-            frame.enc.setVertexBuffer(hands_vbuf.handle, 0, 0); // Use hands/gun buffer
+            // Viewmodel (gun) — re-uses the single-mesh pipeline + a viewmodel depth state
+            frame.enc.setDepthStencilState(pipes.viewmodel_depth.handle);
+            frame.enc.setRenderPipelineState(pipes.ground.handle);
+            frame.enc.setVertexBuffer(static_bufs.gun_vertex.handle, 0, 0);
 
-            // Start with an identity matrix
-            var gun_model = Math.Mat4x4.identity();
-            
-            // --- NEW FIX: FIX SMALL SIZE ---
-            // Let's use a uniform scale of 1.0. The individual pieces of the 
-            // Python gun already have scaling applied to them.
-            const uniform_scale: f32 = 1.0; 
-            gun_model.columns[0][0] = uniform_scale;
-            gun_model.columns[1][1] = uniform_scale;
-            gun_model.columns[2][2] = uniform_scale;
+            const gun_model_mat = player.gunModel(time_sec);
+            // CRITICAL: gun is multiplied by proj only — glues it to the screen.
+            const gun_mvp = Math.Mat4x4.mul(cam.proj, gun_model_mat);
 
-            // --- NEW FIX: FIX BACKWARDNESS ---
-            // Create a rotation matrix that rotates the gun 1.bgra8_unorm degrees (PI radians)
-            // around its local Y-axis (the vertical axis) so it faces forward.
-            // (Assuming your math lib has a standard rotationY function).
-            const pi = std.math.pi;
-            const rotation_y_mat = Math.Mat4x4.rotateY(pi);
-            
-            // Multiply the gun's scale matrix by the rotation matrix
-            gun_model = Math.Mat4x4.mul(gun_model, rotation_y_mat);
-
-            // --- WEAPON SWAY & RECOIL (Purely Visual) ---
-            const sway_y = @sin(time_sec * 3.0) * 0.01;
-            const sway_x = @cos(time_sec * 1.5) * 0.01;
-            const kickback = shake_timer * 1.5; // Kicks backward
-
-            // --- POSITIONING (Relative to screen) ---
-            // Tweak these numbers to place the gun perfectly
-            gun_model.columns[3][0] = 0.3 + sway_x;      // Shift Right
-            gun_model.columns[3][1] = -0.25 + sway_y;    // Shift Down
-            gun_model.columns[3][2] = -0.7 + kickback;   // Shift Forward (Negative Z is into the screen)
-
-            // CRITICAL: Multiply ONLY by proj_mat. This glues it to the camera!
-            const gun_mvp = Math.Mat4x4.mul(proj_mat, gun_model);
-
-            // Send standard light uniforms so it uses the world's lighting
-            frame.enc.setFragmentTexture(gun_texture.handle, 0);
-
-            // Send standard light uniforms so it uses the world's lighting
+            frame.enc.setFragmentTexture(static_bufs.gun_texture.handle, 0);
             frame.enc.setVertexBytes(@ptrCast(&gun_mvp), @sizeOf(Math.Mat4x4), 1);
-            frame.enc.setVertexBytes(@ptrCast(&gun_model), @sizeOf(Math.Mat4x4), 3);
+            frame.enc.setVertexBytes(@ptrCast(&gun_model_mat), @sizeOf(Math.Mat4x4), 3);
             frame.enc.setVertexBytes(@ptrCast(&light_vp), @sizeOf(Math.Mat4x4), 4);
-            
-            // Draw the gun (using its own index count)
-            frame.enc.drawIndexedPrimitives(.triangle, hands_model.indices.len, .uint32, hands_ibuf.handle, 0);
+            frame.enc.drawIndexedPrimitives(
+                .triangle,
+                static_bufs.gun_index_count,
+                .uint32,
+                static_bufs.gun_index.handle,
+                0,
+            );
 
-            // --- CROSSHAIR (last - no depth test, always on top) ---
-            frame.enc.setDepthStencilState(ch_depth_state.handle);
-            frame.enc.setRenderPipelineState(ch_pipeline.handle);
-            frame.enc.setVertexBuffer(ch_vbuf.handle, 0, 0);
+            // Crosshair last — no depth test, always on top
+            frame.enc.setDepthStencilState(pipes.crosshair_depth.handle);
+            frame.enc.setRenderPipelineState(pipes.crosshair.handle);
+            frame.enc.setVertexBuffer(static_bufs.crosshair_vertex.handle, 0, 0);
             frame.enc.setVertexBytes(@ptrCast(&aspect), @sizeOf(f32), 1);
-            frame.enc.setVertexBytes(@ptrCast(&hit_marker_timer), @sizeOf(f32), 2);
-            frame.enc.setFragmentBytes(@ptrCast(&hit_marker_timer), @sizeOf(f32), 2);
-            frame.enc.drawPrimitives(.triangle, 0, ch.VERT_COUNT);
+            frame.enc.setVertexBytes(@ptrCast(&player.hit_marker_timer), @sizeOf(f32), 2);
+            frame.enc.setFragmentBytes(@ptrCast(&player.hit_marker_timer), @sizeOf(f32), 2);
+            frame.enc.drawPrimitives(.triangle, 0, static_bufs.crosshair_vert_count);
 
             frame.submit();
         }
-
-        const pool_class = Zetal.objc.objc_getClass("NSAutoreleasePool");
-        const alloc_sel = Zetal.objc.sel("alloc");
-        const init_sel = Zetal.objc.sel("init");
-        const AllocFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-        const alloc_msg: AllocFn = @ptrCast(&Zetal.objc.objc_msgSend);
-        var pool = alloc_msg(pool_class, alloc_sel);
-        const InitPoolFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
-        const init_pool_msg: InitPoolFn = @ptrCast(&Zetal.objc.objc_msgSend);
-        pool = init_pool_msg(pool, init_sel);
-        const drain_sel = Zetal.objc.sel("drain");
-        const DrainFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
-        const drain_msg: DrainFn = @ptrCast(&Zetal.objc.objc_msgSend);
-        drain_msg(pool, drain_sel);
-
-        simpleSleep(8 * 1000 * 1000);
     }
 }
