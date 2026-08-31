@@ -51,19 +51,19 @@ pub inline fn msgSend(
 }
 
 fn BuildMsgSendFn(comptime Ret: type, comptime Target: type, comptime Args: type) type {
-    const args_fields = @typeInfo(Args).@"struct".fields;
-    const total_params = args_fields.len + 2;
+    const arg_types = @typeInfo(Args).@"struct".field_types;
+    const total_params = arg_types.len + 2;
 
     var param_types: [total_params]type = undefined;
-    var param_attrs: [total_params]std.builtin.Type.Fn.Param.Attributes = undefined;
+    var param_attrs: [total_params]std.lang.Type.Fn.ParamAttributes = undefined;
 
     param_types[0] = Target;
     param_types[1] = Selector;
     param_attrs[0] = .{};
     param_attrs[1] = .{};
 
-    inline for (args_fields, 0..) |f, i| {
-        param_types[i + 2] = f.type;
+    inline for (arg_types, 0..) |T, i| {
+        param_types[i + 2] = T;
         param_attrs[i + 2] = .{};
     }
 
@@ -71,7 +71,7 @@ fn BuildMsgSendFn(comptime Ret: type, comptime Target: type, comptime Args: type
         &param_types,
         &param_attrs,
         Ret,
-        .{ .@"callconv" = std.builtin.CallingConvention.c },
+        .{ .@"callconv" = std.lang.CallingConvention.c },
     );
     return *const FnType;
 }
