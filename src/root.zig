@@ -38,4 +38,5 @@ test {
     @import("std").testing.refAllDecls(window);
     _ = ecs.world;
     _ = ecs.systems;
+    _ = player;
 }

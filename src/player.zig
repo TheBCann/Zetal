@@ -16,6 +16,9 @@ const Mat4x4 = math.Mat4x4;
 const PROJECTILE_SPEED: f32 = 40.0;
 const FIRE_COOLDOWN: f32 = 0.15;
 
+const HITSCAN_DAMAGE: f32 = 25.0;
+const HITSCAN_RANGE: f32 = 100.0;
+
 const MOVE_SPEED: f32 = 5.0;
 const MOUSE_SENSITIVITY: f32 = 0.1;
 const CAM_RADIUS: f32 = 0.3;
@@ -190,21 +193,34 @@ pub const Player = struct {
     fn updateFire(self: *Player, app: *const window.App, world: *ecs.World, dt: f32) void {
         self.fire_cooldown -= dt;
         if (self.fire_cooldown < 0) self.fire_cooldown = 0;
+        if (self.fire_cooldown > 0) return;
 
-        if (!(app.mouse_left_pressed and self.fire_cooldown <= 0)) return;
+        if (app.mouse_left_pressed) {
+            // Hitscan: instant raycast, no projectile entity.
+            if (systems.hitscanSystem(world, self.pos, self.front, HITSCAN_DAMAGE, HITSCAN_RANGE)) |_| {
+                self.onConfirmedHit();
+            }
+            self.applyShotFeedback();
+        } else if (app.mouse_right_pressed) {
+            const spawn_offset: f32 = 1.0;
+            const spawn_pos = Vec3.add(self.pos, Vec3.scale(self.front, spawn_offset));
+            _ = scene.spawnProjectile(
+                world,
+                spawn_pos.x,
+                spawn_pos.y,
+                spawn_pos.z,
+                self.front.x * PROJECTILE_SPEED,
+                self.front.y * PROJECTILE_SPEED,
+                self.front.z * PROJECTILE_SPEED,
+                // Pool exhausted → no projectile exists. Skip feedback: audio/shake
+                // without a bullet reads as a bug, and leaving the cooldown at zero
+                // lets the very next click retry.
+            ) catch return;
+            self.applyShotFeedback();
+        }
+    }
 
-        const spawn_offset: f32 = 1.0;
-        const spawn_pos = Vec3.add(self.pos, Vec3.scale(self.front, spawn_offset));
-        _ = scene.spawnProjectile(
-            world,
-            spawn_pos.x,
-            spawn_pos.y,
-            spawn_pos.z,
-            self.front.x * PROJECTILE_SPEED,
-            self.front.y * PROJECTILE_SPEED,
-            self.front.z * PROJECTILE_SPEED,
-        ) catch {};
-
+    fn applyShotFeedback(self: *Player) void {
         self.shake_timer = SHAKE_ON_FIRE;
         if (self.gunshot_sound) |snd| playNSSound(snd);
         self.fire_cooldown = FIRE_COOLDOWN;
@@ -218,6 +234,104 @@ pub const Player = struct {
         if (self.hit_marker_timer < 0) self.hit_marker_timer = 0;
     }
 };
+
+// ============================================================
+// TESTS
+// ============================================================
+
+const testing = std.testing;
+
+/// App with no live Objective-C objects — input fields only.
+fn testApp() window.App {
+    return window.App{
+        .pool = undefined,
+        .ns_app = undefined,
+        .default_run_loop = undefined,
+        .running = true,
+        .keys = @splat(false),
+    };
+}
+
+/// Player at (0, 0, 5) looking down -Z (yaw -90°), no sound loaded.
+fn testPlayer() Player {
+    return Player{
+        .pos = Vec3.init(0, 0, 5),
+        .yaw = -90.0,
+        .pitch = 0.0,
+        .front = Vec3.init(0, 0, -1),
+        .right = Vec3.init(1, 0, 0),
+        .up = Vec3.init(0, 1, 0),
+        .vy = 0.0,
+        .is_grounded = true,
+        .fire_cooldown = 0.0,
+        .shake_timer = 0.0,
+        .hit_marker_timer = 0.0,
+        .gunshot_sound = null,
+    };
+}
+
+test "failed projectile spawn skips feedback so the shot can retry" {
+    var world = ecs.World.init();
+    for (0..ecs.MAX_ENTITIES) |_| _ = try world.spawn();
+
+    var app = testApp();
+    app.mouse_right_pressed = true;
+    var player = testPlayer();
+
+    player.update(&app, &world, -PLAYER_HEIGHT, 0.016);
+
+    // No bullet → no recoil, no cooldown: the very next click may retry.
+    try testing.expectEqual(@as(f32, 0), player.shake_timer);
+    try testing.expectEqual(@as(f32, 0), player.fire_cooldown);
+}
+
+test "left click hitscans: enemy takes damage, hit marker lights up" {
+    var world = ecs.World.init();
+    const enemy = try world.spawn();
+    world.setTransform(enemy, .{ .x = 0, .y = 0, .z = 0 });
+    world.setCollider(enemy, .{});
+    world.setHealth(enemy, .{});
+    world.setEnemyTag(enemy);
+
+    var app = testApp();
+    app.mouse_left_pressed = true;
+    var player = testPlayer();
+
+    player.update(&app, &world, -PLAYER_HEIGHT, 0.016);
+
+    try testing.expectEqual(@as(f32, 100.0 - HITSCAN_DAMAGE), world.healths[enemy].hp);
+    try testing.expect(world.healths[enemy].hit_timer > 0);
+    try testing.expect(player.hit_marker_timer > 0);
+    try testing.expect(player.fire_cooldown > 0);
+}
+
+test "left click miss: shot feedback fires but no hit marker" {
+    var world = ecs.World.init();
+
+    var app = testApp();
+    app.mouse_left_pressed = true;
+    var player = testPlayer();
+
+    player.update(&app, &world, -PLAYER_HEIGHT, 0.016);
+
+    try testing.expect(player.fire_cooldown > 0);
+    try testing.expectEqual(@as(f32, 0), player.hit_marker_timer);
+}
+
+test "right click fires a physical projectile" {
+    var world = ecs.World.init();
+
+    var app = testApp();
+    app.mouse_right_pressed = true;
+    var player = testPlayer();
+
+    player.update(&app, &world, -PLAYER_HEIGHT, 0.016);
+
+    try testing.expectEqual(@as(u32, 1), world.count);
+    // Projectile flies along the view direction (-Z).
+    try testing.expectEqual(-PROJECTILE_SPEED, world.velocities[0].z);
+    try testing.expect(player.fire_cooldown > 0);
+}
 
 // ============================================================
 // NSSound helpers
