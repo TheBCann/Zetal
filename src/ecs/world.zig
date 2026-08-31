@@ -127,6 +127,10 @@ pub const World = struct {
     count: u32 = 0,
     masks: [MAX_ENTITIES]ComponentMask = @splat(0),
 
+    // LIFO stack of despawned slots, recycled by spawn() before growing count.
+    free_list: [MAX_ENTITIES]Entity = @splat(0),
+    free_count: u32 = 0,
+
     transforms: [MAX_ENTITIES]Transform = @splat(Transform{}),
     spins: [MAX_ENTITIES]Spin = @splat(Spin{}),
     mesh_renderers: [MAX_ENTITIES]MeshRenderer = @splat(MeshRenderer{}),
@@ -142,10 +146,25 @@ pub const World = struct {
     // --- Entity Management ---
 
     pub fn spawn(self: *World) !Entity {
+        if (self.free_count > 0) {
+            self.free_count -= 1;
+            return self.free_list[self.free_count];
+        }
         if (self.count >= MAX_ENTITIES) return error.MaxEntitiesReached;
         const id = self.count;
         self.count += 1;
         return id;
+    }
+
+    /// Despawn an entity: clear its mask (it stops matching every query) and
+    /// push its slot onto the free-list for reuse. Idempotent — an entity whose
+    /// mask is already 0 is skipped, so the slot can't enter the list twice.
+    /// That guard relies on spawn helpers setting at least one component.
+    pub fn despawn(self: *World, e: Entity) void {
+        if (self.masks[e] == 0) return;
+        self.masks[e] = 0;
+        self.free_list[self.free_count] = e;
+        self.free_count += 1;
     }
 
     // --- Component Setters ---
@@ -224,3 +243,67 @@ pub const World = struct {
         return n;
     }
 };
+
+// ============================================================
+// TESTS — entity lifecycle and slot reuse
+// ============================================================
+
+const testing = std.testing;
+
+test "spawn reuses a despawned slot instead of growing count" {
+    var w = World.init();
+    const e0 = try w.spawn();
+    w.setTransform(e0, .{});
+    const e1 = try w.spawn();
+    w.setTransform(e1, .{});
+    const e2 = try w.spawn();
+    w.setTransform(e2, .{});
+
+    w.despawn(e1);
+    const reused = try w.spawn();
+
+    try testing.expectEqual(e1, reused);
+    try testing.expectEqual(@as(u32, 3), w.count);
+}
+
+test "despawn clears the component mask" {
+    var w = World.init();
+    const e = try w.spawn();
+    w.setTransform(e, .{});
+    w.setVelocity(e, .{});
+    try testing.expect(w.masks[e] != 0);
+
+    w.despawn(e);
+
+    try testing.expectEqual(@as(ComponentMask, 0), w.masks[e]);
+}
+
+test "despawning the same entity twice does not hand out the slot twice" {
+    var w = World.init();
+    const e0 = try w.spawn();
+    w.setTransform(e0, .{});
+
+    w.despawn(e0);
+    w.despawn(e0);
+
+    const a = try w.spawn();
+    w.setTransform(a, .{});
+    const b = try w.spawn();
+    w.setTransform(b, .{});
+
+    try testing.expect(a != b);
+}
+
+test "world full of despawned entities can keep spawning" {
+    var w = World.init();
+    for (0..MAX_ENTITIES) |_| {
+        const e = try w.spawn();
+        w.setTransform(e, .{});
+    }
+    try testing.expectError(error.MaxEntitiesReached, w.spawn());
+
+    w.despawn(5);
+    const reused = try w.spawn();
+
+    try testing.expectEqual(@as(Entity, 5), reused);
+}

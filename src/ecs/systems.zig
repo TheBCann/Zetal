@@ -376,14 +376,28 @@ pub fn cleanupFallen(world: *ecs.World, kill_y: f32) u32 {
         if (world.colliders[i].is_static) continue;
 
         if (world.transforms[i].y < kill_y) {
-            // Zero the mask — entity becomes a ghost (no render, no physics)
-            world.masks[i] = 0;
+            world.despawn(@intCast(i));
+            // Keep stale data out of the play area
             world.velocities[i] = .{ .x = 0, .y = 0, .z = 0 };
-            world.transforms[i].y = 9999; // Move far away
+            world.transforms[i].y = 9999;
             cleaned += 1;
         }
     }
     return cleaned;
+}
+
+test "cleanupFallen frees slots for respawning" {
+    var world = ecs.World.init();
+    const e = try world.spawn();
+    world.setTransform(e, .{ .y = -100 });
+    world.setVelocity(e, .{});
+    world.setCollider(e, .{ .is_static = false });
+
+    try std.testing.expectEqual(@as(u32, 1), cleanupFallen(&world, -30.0));
+
+    // The freed slot must be available for the next spawn.
+    const reused = try world.spawn();
+    try std.testing.expectEqual(e, reused);
 }
 
 // ============================================================

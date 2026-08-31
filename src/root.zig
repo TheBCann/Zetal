@@ -36,4 +36,6 @@ pub const MTLResourceOptions = render.device.MTLResourceOptions;
 test {
     @import("std").testing.refAllDecls(render.math);
     @import("std").testing.refAllDecls(window);
+    _ = ecs.world;
+    _ = ecs.systems;
 }
