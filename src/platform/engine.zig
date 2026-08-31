@@ -97,7 +97,7 @@ pub const Core = struct {
         const pass = render.MetalRenderPassDescriptor.create() orelse return null;
 
         // Depth-only: no color attachment, just depth (Store so main pass can sample it)
-        pass.setDepthAttachmentWithStore(self.shadow_map.handle, 1.0, .store_and_multisample_resolve); // 1 = Store
+        pass.setDepthAttachmentWithStore(self.shadow_map.handle, 1.0, .store);
 
         const cmd_buffer = self.queue.createCommandBuffer() orelse return null;
         const encoder = cmd_buffer.createRenderCommandEncoder(pass) orelse return null;

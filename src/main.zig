@@ -76,7 +76,9 @@ pub fn main(init: std.process.Init) !void {
         const now = Io.Clock.Timestamp.now(io, .awake);
         const frame_dt_ns = last_time.durationTo(now).raw.toNanoseconds();
         last_time = now;
-        const dt_sec = @as(f32, @floatFromInt(frame_dt_ns)) / @as(f32, std.time.ns_per_s);
+        // Clamp dt: a window drag or system hitch can produce a huge frame delta,
+        // and at 40 u/s a projectile would tunnel straight through colliders.
+        const dt_sec = @min(@as(f32, @floatFromInt(frame_dt_ns)) / @as(f32, std.time.ns_per_s), 0.033);
 
         const total_elapsed_ns = start_time.durationTo(now).raw.toNanoseconds();
         const time_sec = @as(f32, @floatFromInt(total_elapsed_ns)) / @as(f32, std.time.ns_per_s);
