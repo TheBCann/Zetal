@@ -5,8 +5,13 @@
 A macOS Metal 3D FPS engine written entirely in **nightly Zig**, talking to the
 Objective-C runtime directly (`objc_msgSend`) — no external bindings or wrapper
 libraries. The demo app is a shooting gallery: GPU compute physics, an ECS, a
-two-pass Metal renderer (shadow + main), and a dual-weapon FPS player
-controller (left-click hitscan, right-click projectile).
+two-pass Metal renderer (shadow + main), and an FPS player controller
+(left-click fires physical projectiles that knock blocks around).
+
+Note: a dual-weapon system (left-click hitscan + right-click projectile) was
+tried and reverted — hitscan only damages enemy-tagged entities, so shooting
+the gallery blocks felt like nothing happened. The user prefers projectile
+impact physics on left-click. Don't reintroduce hitscan-as-primary-fire.
 
 ## Commands
 
@@ -68,7 +73,7 @@ executable** (`src/main.zig`, imports `Zetal`).
   Entity slots are recycled through a LIFO free-list: always despawn via
   `world.despawn(e)`, never zero masks by hand.
 - `src/scene.zig` — scene construction (gallery, enemies, projectiles);
-  `src/player.zig` — FPS controller (look/move/jump, dual-weapon fire,
+  `src/player.zig` — FPS controller (look/move/jump, projectile fire,
   screen shake, hit marker); `src/main.zig` — game loop (note the 33ms dt
   clamp: don't remove it, it prevents projectile tunneling on window hitches).
 
