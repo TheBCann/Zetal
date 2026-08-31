@@ -62,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
     // --- Player ---
     var player = Zetal.Player.init();
 
-    try stdout.print("FPS Mode Ready. {d} target cubes. Left-click: hitscan. Right-click: projectile.\n", .{initial_count});
+    try stdout.print("FPS Mode Ready. {d} target cubes. Left-click to fire!\n", .{initial_count});
     try stdout.print("GPU Compute Physics: spatial hash grid + impact conversion\n", .{});
     try stdout.flush();
 
