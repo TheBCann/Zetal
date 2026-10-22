@@ -1,0 +1,54 @@
+// Crosshair and hit-marker overlay: white NDC triangles drawn last, without depth testing.
+//
+// render/pipelines.zig prepends the generated BIND_* slots and SIZEOF_*/OFFSETOF_* struct layout
+// #defines to this file.
+
+#include <metal_stdlib>
+using namespace metal;
+
+struct CrosshairUniforms {
+    float aspect;    // drawable width / height
+    float hitMarker; // hit-marker timer: > 0 shows the marker
+    float2 pad;
+};
+static_assert(sizeof(CrosshairUniforms) == SIZEOF_CROSSHAIR_UNIFORMS, "CrosshairUniforms must match uniforms.zig");
+static_assert(__builtin_offsetof(CrosshairUniforms, hitMarker) == OFFSETOF_CROSSHAIR_HIT_MARKER, "CrosshairUniforms.hitMarker");
+
+struct CrosshairOut {
+    float4 position [[position]];
+    float3 color;
+};
+
+vertex CrosshairOut crosshair_vertex(
+    const device float4* positions [[buffer(BIND_VERTICES)]],
+    constant CrosshairUniforms& params [[buffer(BIND_CROSSHAIR_UNIFORMS)]],
+    uint vid [[vertex_id]]
+) {
+    CrosshairOut out;
+    float4 pos = positions[vid];
+
+    // geometry.zig tags the hit-marker vertices with w = 2
+    bool isHitmarker = (pos.w > 1.5);
+    pos.w = 1.0; // reset w so the position is a plain NDC point
+
+    if (isHitmarker) {
+        if (params.hitMarker <= 0.0) {
+            // Timer dead: collapse the marker so it rasterizes nothing
+            pos.xy = float2(0.0);
+        } else {
+            // CS:GO style pop: expands slightly outward as it fades
+            float pop = 1.0 + (1.0 - params.hitMarker) * 0.5;
+            pos.xy *= pop;
+        }
+    }
+    out.color = float3(1.0); // crosshair and hit marker are both white
+
+    pos.x /= params.aspect;
+    out.position = pos;
+    return out;
+}
+
+fragment float4 crosshair_fragment(CrosshairOut in [[stage_in]]) {
+    // Solid colour: the hit marker snaps out of existence when its timer reaches zero
+    return float4(in.color, 1.0);
+}

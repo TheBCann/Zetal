@@ -1,0 +1,269 @@
+// Scene shaders: sky, the shadow-map depth pass, and the Blinn-Phong + PCF-shadow lit meshes.
+//
+// render/pipelines.zig prepends generated #defines to this file: every [[buffer]]/[[texture]] slot
+// (BIND_*), SHADOW_MAP_SIZE, and the Zig struct sizes/offsets (SIZEOF_*/OFFSETOF_*) the static_asserts
+// below check, so the Zig encoders and these shaders cannot drift apart.
+
+#include <metal_stdlib>
+using namespace metal;
+
+struct Vertex {
+    float4 position;
+    float4 color;
+    float4 uv;
+    float4 normal;
+};
+static_assert(sizeof(Vertex) == SIZEOF_VERTEX, "Vertex must match geometry.zig");
+
+struct VertexOut {
+    float4 position [[position]];
+    float4 color;
+    float2 uv;
+    float3 normal;
+    float3 worldPos;
+    float4 lightSpacePos;
+    float hitTimer;
+};
+
+// Each float3 occupies 16 bytes; uniforms.zig spells that padding out.
+struct LightUniforms {
+    float3 lightPos;
+    float3 viewPos;
+    float3 lightColor;
+    float ambientStrength;
+    float specularStrength;
+    float shininess;
+};
+static_assert(sizeof(LightUniforms) == SIZEOF_LIGHT_UNIFORMS, "LightUniforms must match uniforms.zig");
+static_assert(__builtin_offsetof(LightUniforms, viewPos) == OFFSETOF_LIGHT_VIEW_POS, "LightUniforms.viewPos");
+static_assert(__builtin_offsetof(LightUniforms, lightColor) == OFFSETOF_LIGHT_COLOR, "LightUniforms.lightColor");
+static_assert(__builtin_offsetof(LightUniforms, ambientStrength) == OFFSETOF_LIGHT_AMBIENT, "LightUniforms.ambientStrength");
+static_assert(__builtin_offsetof(LightUniforms, shininess) == OFFSETOF_LIGHT_SHININESS, "LightUniforms.shininess");
+
+// A full float4: binding 12 bytes to a float3 (16 bytes in MSL) read past the end.
+struct SkyUniforms {
+    float4 sunDir; // xyz = unit vector towards the sun, w = 0
+};
+static_assert(sizeof(SkyUniforms) == SIZEOF_SKY_UNIFORMS, "SkyUniforms must match uniforms.zig");
+
+// ===========================================
+// SKYBOX
+// ===========================================
+
+struct SkyboxOut {
+    float4 position [[position]];
+    float3 direction;
+};
+
+vertex SkyboxOut skybox_vertex(
+    uint vertexID [[vertex_id]],
+    constant float4 *vertices [[buffer(BIND_VERTICES)]],
+    constant float4x4 &viewProj [[buffer(BIND_SKY_VIEW_PROJ)]]
+) {
+    SkyboxOut out;
+    float3 pos = vertices[vertexID].xyz;
+    out.direction = pos;
+
+    // w = 0 drops the view-projection's translation, so the sky stays centred on the camera
+    float4 clipPos = viewProj * float4(pos, 0.0);
+    // z = w puts the sky at the far plane (depth 1), behind everything
+    out.position = clipPos.xyww;
+    return out;
+}
+
+fragment float4 skybox_fragment(
+    SkyboxOut in [[stage_in]],
+    constant SkyUniforms &sky [[buffer(BIND_SKY_UNIFORMS)]]
+) {
+    float3 dir = normalize(in.direction);
+    float y = dir.y;
+
+    // Sky gradient: deep blue at zenith, lighter at horizon, warm below
+    float3 zenith = float3(0.15, 0.25, 0.55);
+    float3 horizon = float3(0.6, 0.7, 0.85);
+    float3 ground = float3(0.2, 0.2, 0.18);
+
+    float3 color;
+    if (y > 0.0) {
+        // Above horizon: blend horizon -> zenith
+        float t = pow(y, 0.4);
+        color = mix(horizon, zenith, t);
+    } else {
+        // Below horizon: blend horizon -> ground
+        float t = pow(clamp(-y, 0.0, 1.0), 0.5);
+        color = mix(horizon, ground, t);
+    }
+
+    // Sun disc
+    float3 sunDirection = normalize(sky.sunDir.xyz);
+    float sunDot = dot(dir, sunDirection);
+    float sunDisc = smoothstep(0.9975, 0.999, sunDot);
+    float3 sunColor = float3(1.0, 0.95, 0.8);
+    color = mix(color, sunColor, sunDisc);
+
+    // Sun glow
+    float glow = pow(max(sunDot, 0.0), 64.0);
+    color += float3(1.0, 0.8, 0.4) * glow * 0.3;
+
+    return float4(color, 1.0);
+}
+
+// ===========================================
+// SHADOW PASS (depth only, no fragment function)
+// ===========================================
+
+struct ShadowOut {
+    float4 position [[position]];
+};
+
+vertex ShadowOut shadow_vertex(
+    uint vertexID [[vertex_id]],
+    uint instanceID [[instance_id]],
+    constant Vertex *vertices [[buffer(BIND_VERTICES)]],
+    constant float4x4 *lightMVPs [[buffer(BIND_SHADOW_MVP)]]
+) {
+    ShadowOut out;
+    out.position = lightMVPs[instanceID] * vertices[vertexID].position;
+    return out;
+}
+
+vertex ShadowOut shadow_vertex_single(
+    uint vertexID [[vertex_id]],
+    constant Vertex *vertices [[buffer(BIND_VERTICES)]],
+    constant float4x4 &lightMVP [[buffer(BIND_SHADOW_MVP)]]
+) {
+    ShadowOut out;
+    out.position = lightMVP * vertices[vertexID].position;
+    return out;
+}
+
+// ===========================================
+// MAIN PASS — instanced
+// ===========================================
+
+vertex VertexOut vertex_main(
+    uint vertexID [[vertex_id]],
+    uint instanceID [[instance_id]],
+    constant Vertex *vertices [[buffer(BIND_VERTICES)]],
+    constant float4x4 *mvps [[buffer(BIND_MVP)]],
+    constant float4x4 *models [[buffer(BIND_MODEL)]],
+    constant float4x4 &lightVP [[buffer(BIND_LIGHT_VIEW_PROJ)]],
+    constant float *hitTimers [[buffer(BIND_HIT_TIMERS)]]
+) {
+    VertexOut out;
+    float4x4 mvp = mvps[instanceID];
+    float4x4 model = models[instanceID];
+    float4 rawPos = vertices[vertexID].position;
+    float4 rawNorm = vertices[vertexID].normal;
+
+    out.position = mvp * rawPos;
+    out.worldPos = (model * rawPos).xyz;
+    out.lightSpacePos = lightVP * model * rawPos;
+
+    float3x3 normalMatrix = float3x3(model[0].xyz, model[1].xyz, model[2].xyz);
+    out.normal = normalize(normalMatrix * rawNorm.xyz);
+
+    out.color = vertices[vertexID].color;
+    out.uv = vertices[vertexID].uv.xy;
+    out.hitTimer = hitTimers[instanceID];
+    return out;
+}
+
+// ===========================================
+// MAIN PASS — single object (ground, gun)
+// ===========================================
+
+vertex VertexOut vertex_single(
+    uint vertexID [[vertex_id]],
+    constant Vertex *vertices [[buffer(BIND_VERTICES)]],
+    constant float4x4 &mvp [[buffer(BIND_MVP)]],
+    constant float4x4 &model [[buffer(BIND_MODEL)]],
+    constant float4x4 &lightVP [[buffer(BIND_LIGHT_VIEW_PROJ)]]
+) {
+    VertexOut out;
+    float4 rawPos = vertices[vertexID].position;
+    float4 rawNorm = vertices[vertexID].normal;
+
+    out.position = mvp * rawPos;
+    out.worldPos = (model * rawPos).xyz;
+    out.lightSpacePos = lightVP * model * rawPos;
+
+    float3x3 normalMatrix = float3x3(model[0].xyz, model[1].xyz, model[2].xyz);
+    out.normal = normalize(normalMatrix * rawNorm.xyz);
+
+    out.color = vertices[vertexID].color;
+    out.uv = vertices[vertexID].uv.xy;
+    out.hitTimer = 0.0;
+    return out;
+}
+
+// ===========================================
+// BLINN-PHONG + SHADOW FRAGMENT
+// ===========================================
+
+// Returns the shadowed fraction (0 = lit, 1 = fully shadowed) from a 3x3 PCF of manual depth tests.
+float shadowCalc(float4 lightSpacePos, depth2d<float> shadowMap) {
+    float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    float2 shadowUV = projCoords.xy * 0.5 + 0.5;
+    shadowUV.y = 1.0 - shadowUV.y;
+
+    // Outside the light's x/y footprint: unshadowed. There is deliberately no z > 1 rule: past the far
+    // plane (by more than the 0.005 bias) every tap compares against the 1.0 clear and comes out
+    // shadowed (the original's dark band). renderer.zig's edge-rule test pins both rules.
+    if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0) {
+        return 0.0;
+    }
+
+    float currentDepth = projCoords.z;
+    // A plain sampler: each tap returns the filtered stored depth and the test below is done by hand.
+    // (The original passed a comparison sampler to sample(), which ignores compare_func: same result.)
+    constexpr sampler shadowSampler(coord::normalized, filter::linear, address::clamp_to_edge);
+    float shadow = 0.0;
+    float bias = 0.005;
+    float texelSize = 1.0 / float(SHADOW_MAP_SIZE);
+
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float2 offset = float2(float(x), float(y)) * texelSize;
+            float pcfDepth = shadowMap.sample(shadowSampler, shadowUV + offset);
+            shadow += (currentDepth - bias > pcfDepth) ? 1.0 : 0.0;
+        }
+    }
+    shadow /= 9.0;
+    return shadow;
+}
+
+fragment float4 fragment_main(
+    VertexOut in [[stage_in]],
+    texture2d<float> tex [[texture(BIND_ALBEDO_TEXTURE)]],
+    depth2d<float> shadowMap [[texture(BIND_SHADOW_MAP_TEXTURE)]],
+    constant LightUniforms &light [[buffer(BIND_LIGHT_UNIFORMS)]]
+) {
+    constexpr sampler sam(mag_filter::nearest, min_filter::nearest, address::repeat);
+    float4 texColor = tex.sample(sam, in.uv);
+
+    float3 norm = normalize(in.normal);
+    float3 lightDir = normalize(light.lightPos - in.worldPos);
+    float3 viewDir = normalize(light.viewPos - in.worldPos);
+
+    float3 ambient = light.ambientStrength * light.lightColor;
+
+    float diff = max(dot(norm, lightDir), 0.0);
+    float3 diffuse = diff * light.lightColor;
+
+    float3 halfDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(norm, halfDir), 0.0), light.shininess);
+    float3 specular = light.specularStrength * spec * light.lightColor;
+
+    float shadow = shadowCalc(in.lightSpacePos, shadowMap);
+
+    float3 result = (ambient + (1.0 - shadow) * (diffuse + specular)) * in.color.rgb * texColor.rgb;
+
+    // Hit flash: blend toward bright red while the hit timer runs
+    if (in.hitTimer > 0.0) {
+        float3 flashColor = float3(1.0, 0.2, 0.2);
+        result = mix(result, flashColor, in.hitTimer * 0.7);
+    }
+
+    return float4(result, 1.0);
+}

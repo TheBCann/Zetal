@@ -1,0 +1,240 @@
+// Zetal GPU physics: velocity integration, AABBs and a spatial-hash broad phase, one thread per entity slot.
+//
+// physics.zig prepends a generated prelude of #defines (MAX_PAIRS, GRID_SIZE, CELL_SIZE, the MASK_*
+// component bits, the BUFFER_* slots and the SIZEOF_* struct sizes), so every value shared with Zig
+// is defined once, in Zig; this file does not compile on its own. physics.zig runs the kernels in
+// file order in one serial compute pass, so each kernel sees everything the previous ones wrote.
+
+#include <metal_stdlib>
+using namespace metal;
+
+// ============================================================
+// Buffer layouts (byte for byte the structs in physics_layout.zig)
+// ============================================================
+
+struct GPUTransform {
+    float x, y, z, scale;
+    float rot_x, rot_y, rot_z, _pad;
+};
+
+struct GPUVelocity {
+    float x, y, z, _pad;
+};
+
+struct GPUCollider {
+    float half_x, half_y, half_z;
+    uint is_static; // 1 = static: never falls, and two static colliders never pair
+};
+
+struct GPUAABB {
+    float min_x, min_y, min_z, _pad0;
+    float max_x, max_y, max_z, _pad1;
+};
+
+struct CollisionPair {
+    uint a, b;                 // entity slots, a < b
+    float pen_x, pen_y, pen_z; // overlap depth per axis, all > 0
+    float _pad;
+};
+
+struct PhysicsParams {
+    float dt;
+    float gravity;
+    uint entity_count; // the kernels process slots [0, entity_count)
+    uint _pad;
+};
+
+static_assert(sizeof(GPUTransform) == SIZEOF_GPU_TRANSFORM, "GPUTransform differs from physics_layout.zig");
+static_assert(sizeof(GPUVelocity) == SIZEOF_GPU_VELOCITY, "GPUVelocity differs from physics_layout.zig");
+static_assert(sizeof(GPUCollider) == SIZEOF_GPU_COLLIDER, "GPUCollider differs from physics_layout.zig");
+static_assert(sizeof(GPUAABB) == SIZEOF_GPU_AABB, "GPUAABB differs from physics_layout.zig");
+static_assert(sizeof(CollisionPair) == SIZEOF_COLLISION_PAIR, "CollisionPair differs from physics_layout.zig");
+static_assert(sizeof(PhysicsParams) == SIZEOF_PHYSICS_PARAMS, "PhysicsParams differs from physics_layout.zig");
+
+// The component sets the kernels select on.
+constant uint MOVING_MASK = MASK_TRANSFORM | MASK_VELOCITY;   // integrated
+constant uint COLLIDER_MASK = MASK_TRANSFORM | MASK_COLLIDER; // boxed, filed in the grid, paired
+
+// ============================================================
+// Spatial hash grid
+// ============================================================
+//
+// Space is cut into CELL_SIZE cubes, every cell hashes to one of GRID_SIZE buckets, and each bucket
+// is a linked list of entity slots: cell_heads[bucket] -> next_nodes[slot] -> ... -> EMPTY_NODE.
+//
+// INVARIANT: every collider half-extent is <= CELL_SIZE / 2. Two overlapping boxes are then less
+// than CELL_SIZE apart on every axis, so their cells differ by at most one per axis and the 3x3x3
+// neighbourhood broad_phase searches holds both. A larger collider can miss pairs.
+
+constant uint EMPTY_NODE = 0xFFFFFFFFu; // ends a bucket's list; never a valid slot
+
+// The cell holding an entity. build_grid and broad_phase both take an entity's cell from here, from
+// the same transform, so an entity is always searched for in the cell it was filed under.
+inline int3 grid_cell(device const GPUTransform& t) {
+    return int3(floor(float3(t.x, t.y, t.z) / CELL_SIZE));
+}
+
+// The bucket a cell's entities are listed in (the hash primes of Teschner et al. 2003). Distinct
+// cells can share a bucket: the primes are odd, so negating two odd coordinates leaves the XOR
+// unchanged, and (-1,-1,-1), (1,1,-1), (1,-1,1), (-1,1,1) all hash alike.
+inline uint grid_bucket(int3 cell) {
+    uint h = (uint(cell.x) * 73856093u) ^ (uint(cell.y) * 19349663u) ^ (uint(cell.z) * 83492791u);
+    return h % GRID_SIZE;
+}
+
+// ============================================================
+// Kernel 1: velocity integration
+// ============================================================
+
+kernel void integrate_velocity(
+    device GPUTransform* transforms      [[buffer(BUFFER_TRANSFORMS)]],
+    device GPUVelocity* velocities       [[buffer(BUFFER_VELOCITIES)]],
+    device const GPUCollider* colliders  [[buffer(BUFFER_COLLIDERS)]],
+    device const uint* masks             [[buffer(BUFFER_MASKS)]],
+    constant PhysicsParams& params       [[buffer(BUFFER_PARAMS)]],
+    uint id [[thread_position_in_grid]])
+{
+    if (id >= params.entity_count) return;
+    uint m = masks[id];
+    if ((m & MOVING_MASK) != MOVING_MASK) return;
+
+    // Gravity pulls dynamic colliders only; a moving body without a collider just drifts.
+    if ((m & MASK_COLLIDER) != 0 && colliders[id].is_static == 0) {
+        velocities[id].y += params.gravity * params.dt;
+    }
+
+    // Semi-implicit Euler: the position moves with the velocity just updated.
+    transforms[id].x += velocities[id].x * params.dt;
+    transforms[id].y += velocities[id].y * params.dt;
+    transforms[id].z += velocities[id].z * params.dt;
+}
+
+// ============================================================
+// Kernel 2: world-space AABBs
+// ============================================================
+
+kernel void compute_aabbs(
+    device const GPUTransform* transforms [[buffer(BUFFER_TRANSFORMS)]],
+    device const GPUCollider* colliders   [[buffer(BUFFER_COLLIDERS)]],
+    device const uint* masks              [[buffer(BUFFER_MASKS)]],
+    device GPUAABB* aabbs                 [[buffer(BUFFER_AABBS)]],
+    constant PhysicsParams& params        [[buffer(BUFFER_PARAMS)]],
+    uint id [[thread_position_in_grid]])
+{
+    if (id >= params.entity_count) return;
+
+    if ((masks[id] & COLLIDER_MASK) != COLLIDER_MASK) {
+        // An inside-out box that overlaps nothing.
+        aabbs[id] = GPUAABB{ 1e9f, 1e9f, 1e9f, 0.0f, -1e9f, -1e9f, -1e9f, 0.0f };
+        return;
+    }
+
+    float3 position = float3(transforms[id].x, transforms[id].y, transforms[id].z);
+    float3 half_extent = float3(colliders[id].half_x, colliders[id].half_y, colliders[id].half_z);
+    float3 lo = position - half_extent;
+    float3 hi = position + half_extent;
+    aabbs[id] = GPUAABB{ lo.x, lo.y, lo.z, 0.0f, hi.x, hi.y, hi.z, 0.0f };
+}
+
+// ============================================================
+// Kernel 3: empty every bucket
+// ============================================================
+
+kernel void clear_grid(
+    device atomic_uint* cell_heads [[buffer(BUFFER_CELL_HEADS)]],
+    uint id [[thread_position_in_grid]])
+{
+    if (id >= GRID_SIZE) return;
+    atomic_store_explicit(&cell_heads[id], EMPTY_NODE, memory_order_relaxed);
+}
+
+// ============================================================
+// Kernel 4: file every collider under its cell's bucket
+// ============================================================
+
+kernel void build_grid(
+    device const GPUTransform* transforms [[buffer(BUFFER_TRANSFORMS)]],
+    device const uint* masks              [[buffer(BUFFER_MASKS)]],
+    device atomic_uint* cell_heads        [[buffer(BUFFER_CELL_HEADS)]],
+    device atomic_uint* next_nodes        [[buffer(BUFFER_NEXT_NODES)]],
+    constant PhysicsParams& params        [[buffer(BUFFER_PARAMS)]],
+    uint id [[thread_position_in_grid]])
+{
+    if (id >= params.entity_count) return;
+    if ((masks[id] & COLLIDER_MASK) != COLLIDER_MASK) return;
+
+    uint bucket = grid_bucket(grid_cell(transforms[id]));
+    // Push this slot onto the front of the bucket's list: swap it in as the head, then link it to
+    // whatever the head was.
+    uint previous = atomic_exchange_explicit(&cell_heads[bucket], id, memory_order_relaxed);
+    atomic_store_explicit(&next_nodes[id], previous, memory_order_relaxed);
+}
+
+// ============================================================
+// Kernel 5: broad phase over the 3x3x3 cell neighbourhood
+// ============================================================
+
+kernel void broad_phase(
+    device const GPUTransform* transforms [[buffer(BUFFER_TRANSFORMS)]],
+    device const GPUCollider* colliders   [[buffer(BUFFER_COLLIDERS)]],
+    device const uint* masks              [[buffer(BUFFER_MASKS)]],
+    device const GPUAABB* aabbs           [[buffer(BUFFER_AABBS)]],
+    device CollisionPair* pairs           [[buffer(BUFFER_PAIRS)]],
+    device atomic_uint* pair_count        [[buffer(BUFFER_PAIR_COUNT)]],
+    device atomic_uint* cell_heads        [[buffer(BUFFER_CELL_HEADS)]],
+    device atomic_uint* next_nodes        [[buffer(BUFFER_NEXT_NODES)]],
+    constant PhysicsParams& params        [[buffer(BUFFER_PARAMS)]],
+    uint id [[thread_position_in_grid]])
+{
+    if (id >= params.entity_count) return;
+    if ((masks[id] & COLLIDER_MASK) != COLLIDER_MASK) return;
+
+    GPUAABB a = aabbs[id];
+    bool a_static = colliders[id].is_static != 0;
+    int3 home = grid_cell(transforms[id]);
+
+    // Buckets this thread has walked. A neighbour cell whose bucket was already walked (cells can
+    // share one, see grid_bucket) is skipped: walking a bucket twice emits each of its pairs twice.
+    uint visited[27];
+    uint visited_count = 0;
+
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                uint bucket = grid_bucket(home + int3(dx, dy, dz));
+                bool seen = false;
+                for (uint k = 0; k < visited_count; k++) {
+                    if (visited[k] == bucket) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen) continue;
+                visited[visited_count++] = bucket;
+
+                // Every listed slot is a collider: build_grid files nothing else.
+                uint node = atomic_load_explicit(&cell_heads[bucket], memory_order_relaxed);
+                while (node != EMPTY_NODE) {
+                    uint j = node;
+                    node = atomic_load_explicit(&next_nodes[j], memory_order_relaxed);
+
+                    if (j <= id) continue; // each pair once, from its lower slot (also skips id itself)
+                    if (a_static && colliders[j].is_static != 0) continue;
+
+                    GPUAABB b = aabbs[j];
+                    float pen_x = min(a.max_x, b.max_x) - max(a.min_x, b.min_x);
+                    float pen_y = min(a.max_y, b.max_y) - max(a.min_y, b.min_y);
+                    float pen_z = min(a.max_z, b.max_z) - max(a.min_z, b.min_z);
+                    if (pen_x <= 0 || pen_y <= 0 || pen_z <= 0) continue; // apart, or only touching
+
+                    // Counted even past MAX_PAIRS (only the store is skipped), so the CPU can report
+                    // how many pairs were dropped.
+                    uint index = atomic_fetch_add_explicit(pair_count, 1u, memory_order_relaxed);
+                    if (index < MAX_PAIRS) {
+                        pairs[index] = CollisionPair{ id, j, pen_x, pen_y, pen_z, 0.0f };
+                    }
+                }
+            }
+        }
+    }
+}

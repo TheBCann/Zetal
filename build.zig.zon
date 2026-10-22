@@ -1,0 +1,22 @@
+.{
+    // The package name, as other packages see it (`zig fetch --save` uses it as the dependency key).
+    .name = .zetal,
+    // A [Semantic Version](https://semver.org/): 0.2 is the from-scratch rewrite of Zetal 0.0.
+    .version = "0.2.0",
+    // Together with `name`, the globally unique identity of this package; generated once and then
+    // never changed. Its high 32 bits are the CRC32 of the name, which zig checks against `.name`.
+    .fingerprint = 0x12a2bf5b77c32999, // Changing this has security and trust implications.
+    // Zetal tracks bleeding-edge nightly Zig; this is the nightly the code is verified against.
+    .minimum_zig_version = "0.18.0-dev.253+16d31ceed",
+    // No dependencies: the engine talks to the Objective-C runtime and Apple's frameworks directly.
+    .dependencies = .{},
+    // The files that make up the package (and its hash).
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "assets",
+        "tools",
+        "README.md",
+    },
+}
