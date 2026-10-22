@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //! Platform layer: NSApplication and input, the game window, autorelease pools and NSSound playback.
 
 // Every file in this directory, pub-imported so src/root.zig's test discovery reaches it.
@@ -25,3 +26,11 @@ pub const Window = window.Window;
 pub const AutoreleasePool = autorelease.AutoreleasePool;
 /// One loaded sound file.
 pub const Sound = sound.Sound;
+||||||| empty tree
+=======
+pub const window = @import("window.zig");
+pub const engine = @import("engine.zig");
+pub const autoreleasepool = @import("autoreleasepool.zig");
+
+pub const AutoreleasePool = autoreleasepool.AutoreleasePool;
+>>>>>>> Zetal/main

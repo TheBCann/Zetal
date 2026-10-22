@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //! Entity-component system: the parallel-array World and the systems that run over it.
 
 // Every file in this directory, pub-imported so src/root.zig's test discovery reaches it.
@@ -24,3 +25,19 @@ pub const bit = world.bit;
 pub const mask = world.mask;
 /// True when a mask has every required bit.
 pub const hasMask = world.hasMask;
+||||||| empty tree
+=======
+pub const world = @import("world.zig");
+pub const systems = @import("systems.zig");
+
+// Re-export common types
+pub const Entity = world.Entity;
+pub const World = world.World;
+pub const Transform = world.Transform;
+pub const Spin = world.Spin;
+pub const Velocity = world.Velocity;
+pub const MeshRenderer = world.MeshRenderer;
+pub const Collider = world.Collider;
+pub const ComponentFlags = world.Component;
+pub const mask = world.mask;
+>>>>>>> Zetal/main

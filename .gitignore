@@ -1,3 +1,14 @@
+<<<<<<< HEAD
 .zig-cache/
 zig-out/
 CLAUDE.md
+||||||| empty tree
+=======
+.zig-cache/
+zig-out/
+.envrc
+./deploy/
+./refactor.sh
+./src.bak/
+./src.bak2/
+>>>>>>> Zetal/main

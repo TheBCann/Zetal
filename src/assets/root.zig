@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //! Asset loaders: Wavefront OBJ meshes and binary PPM images.
 
 // Every file in this directory, pub-imported so src/root.zig's test discovery reaches it.
@@ -11,3 +12,8 @@ pub const ppm = @import("ppm.zig");
 pub const Mesh = obj.Mesh;
 /// An RGBA8 image (CPU copy).
 pub const Image = ppm.Image;
+||||||| empty tree
+=======
+pub const loader = @import("loader.zig");
+pub const texture = @import("texture.zig");
+>>>>>>> Zetal/main
